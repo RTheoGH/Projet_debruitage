@@ -12,10 +12,10 @@ def unpickle(file):
 def main():
 
     dic1 = unpickle('../cifar-10-batches-py/data_batch_1')
-    dic2 = unpickle('../cifar-10-batches-py/data_batch_1')
-    dic3 = unpickle('../cifar-10-batches-py/data_batch_1')
-    dic4 = unpickle('../cifar-10-batches-py/data_batch_1')
-    dic5 = unpickle('../cifar-10-batches-py/data_batch_1')
+    dic2 = unpickle('../cifar-10-batches-py/data_batch_2')
+    dic3 = unpickle('../cifar-10-batches-py/data_batch_3')
+    dic4 = unpickle('../cifar-10-batches-py/data_batch_4')
+    dic5 = unpickle('../cifar-10-batches-py/data_batch_5')
 
     dic1b = dic1[b'data']
     dic2b = dic2[b'data']
