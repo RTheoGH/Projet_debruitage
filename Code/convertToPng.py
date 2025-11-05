@@ -1,8 +1,6 @@
-
 import cv2
 import numpy as np
 import pickle
-
 
 def unpickle(file):
     with open(file, 'rb') as fo:
