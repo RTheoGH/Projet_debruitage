@@ -1,45 +1,60 @@
 import cv2
 import numpy as np
 import pickle
+import os
 
 def unpickle(file):
     with open(file, 'rb') as fo:
         dict = pickle.load(fo, encoding='bytes')
     return dict
 
-def main():
+def main(val_count=1000, train_count=None):
+    out_train_truth = os.path.join('..', 'allImages', 'train', 'truth')
+    out_val_truth = os.path.join('..', 'allImages', 'validation', 'truth')
+    os.makedirs(out_train_truth, exist_ok=True)
+    os.makedirs(out_val_truth, exist_ok=True)
 
-    dic1 = unpickle('../cifar-10-batches-py/data_batch_1')
-    dic2 = unpickle('../cifar-10-batches-py/data_batch_2')
-    dic3 = unpickle('../cifar-10-batches-py/data_batch_3')
-    dic4 = unpickle('../cifar-10-batches-py/data_batch_4')
-    dic5 = unpickle('../cifar-10-batches-py/data_batch_5')
+    batches = [
+        unpickle('../cifar-10-batches-py/data_batch_1')[b'data'],
+        unpickle('../cifar-10-batches-py/data_batch_2')[b'data'],
+        unpickle('../cifar-10-batches-py/data_batch_3')[b'data'],
+        unpickle('../cifar-10-batches-py/data_batch_4')[b'data'],
+        unpickle('../cifar-10-batches-py/data_batch_5')[b'data'],
+    ]
 
-    dic1b = dic1[b'data']
-    dic2b = dic2[b'data']
-    dic3b = dic3[b'data']
-    dic4b = dic4[b'data']
-    dic5b = dic5[b'data']
-    dic1b = dic1b.reshape(10000,3,32,32).transpose(0,2,3,1)
-    dic2b = dic2b.reshape(10000,3,32,32).transpose(0,2,3,1)
-    dic3b = dic3b.reshape(10000,3,32,32).transpose(0,2,3,1)
-    dic4b = dic4b.reshape(10000,3,32,32).transpose(0,2,3,1)
-    dic5b = dic5b.reshape(10000,3,32,32).transpose(0,2,3,1)
+    arrays = [b.reshape(10000, 3, 32, 32).transpose(0, 2, 3, 1) for b in batches]
+    data = np.concatenate(arrays, axis=0)
 
-    for i in range(dic1b.shape[0]):
-        cv2.imwrite(f'../images/ori1-{i}.png', dic1b[i])
+    total = data.shape[0]
+    if val_count is None:
+        val_count = 1000
+    if val_count < 0:
+        val_count = 0
+    if train_count is None or train_count < 0:
+        train_count = total - val_count
 
-    for i in range(dic2b.shape[0]):
-        cv2.imwrite(f'../images/ori2-{i}.png', dic2b[i])
+    if val_count > total:
+        val_count = total
+        train_count = 0
+    if val_count + train_count > total:
+        train_count = total - val_count
 
-    for i in range(dic3b.shape[0]):
-        cv2.imwrite(f'../images/ori3-{i}.png', dic3b[i])
-
-    for i in range(dic4b.shape[0]):
-        cv2.imwrite(f'../images/ori4-{i}.png', dic4b[i])
-
-    for i in range(dic5b.shape[0]):
-        cv2.imwrite(f'../images/ori5-{i}.png', dic5b[i])
+    val_idx = 1
+    train_idx = 1
+    for i in range(total):
+        img = data[i]
+        if i < val_count:
+            fname = f'val{val_idx}.png'
+            cv2.imwrite(os.path.join(out_val_truth, fname), img)
+            val_idx += 1
+        elif i < val_count + train_count:
+            fname = f'train{train_idx}.png'
+            cv2.imwrite(os.path.join(out_train_truth, fname), img)
+            train_idx += 1
+        else:
+            break
 
 if __name__ == "__main__":
-    main()
+    VAL_COUNT = 1000
+    TRAIN_COUNT = 10000
+    main(val_count=VAL_COUNT, train_count=TRAIN_COUNT)

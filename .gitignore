@@ -3,3 +3,6 @@ images/
 saltandpepper/
 poisson/
 gaussian/
+allImages/
+__pycache__/
+model/
