@@ -2,7 +2,6 @@ import numpy as np
 import cv2
 import os
 
-
 def add_salt_and_pepper(image, salt_ratio=0.05, pepper_ratio=0.05):
     noisy = image.copy()
     if noisy.ndim == 2:
@@ -29,16 +28,25 @@ def process():
         os.makedirs(out_dir, exist_ok=True)
         if not os.path.isdir(src):
             continue
-        files = sorted(f for f in os.listdir(src) if f.lower().endswith('.png'))
-        idx = 1
+        allowed_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
+        files = sorted(f for f in os.listdir(src) if f.lower().endswith(allowed_exts))
+
         for f in files:
-            img = cv2.imread(os.path.join(src, f), cv2.IMREAD_UNCHANGED)
+            src_path = os.path.join(src, f)
+            img = cv2.imread(src_path, cv2.IMREAD_UNCHANGED)
             if img is None:
+                print(f"Warning: impossible de lire '{src_path}', skipping")
                 continue
+
             noisy = add_salt_and_pepper(img)
-            out_name = f'saltandpepper{idx}.png'
-            cv2.imwrite(os.path.join(out_dir, out_name), noisy)
-            idx += 1
+
+            out_name = f
+            out_path = os.path.join(out_dir, out_name)
+            written = cv2.imwrite(out_path, noisy)
+            if not written:
+                print(f"Error: impossible d'écrire '{out_path}'")
+            else:
+                print(f"Sauvegardé: {out_path}")
 
 
 if __name__ == '__main__':

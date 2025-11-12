@@ -65,7 +65,7 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class PairedImageDataset(Dataset):
     """Load pairs of images (input, gt) from two folders. Filenames must match."""
-    def __init__(self, input_dir, gt_dir, img_size=(32,32), transform=None):
+    def __init__(self, input_dir, gt_dir, img_size=(128,128), transform=None):
         self.input_dir = input_dir
         self.gt_dir = gt_dir
         def index_map(d):
