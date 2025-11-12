@@ -50,7 +50,7 @@ VAL_GT_DIR =      '../allImages/validation/truth'
 TEST_INPUT_DIR =  '../allImages/validation/noised/gaussian/test'
 TEST_GT_DIR =     '../allImages/validation/truth/test'
 
-IMG_SIZE = (32, 32)
+IMG_SIZE = (128, 128)
 
 BATCH_SIZE = 3
 NUM_EPOCHS = 3

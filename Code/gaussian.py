@@ -19,7 +19,8 @@ def process():
         os.makedirs(out_dir, exist_ok=True)
         if not os.path.isdir(src):
             continue
-        files = sorted(f for f in os.listdir(src) if f.lower().endswith('.png'))
+        files = sorted(f for f in os.listdir(src) if f.lower().endswith('.jpg'))
+        # files = sorted(f for f in os.listdir(src) if f.lower().endswith('.png'))
         idx = 1
         for f in files:
             img = cv2.imread(os.path.join(src, f), cv2.IMREAD_UNCHANGED)
