@@ -43,17 +43,17 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # ------------------ CONFIG------------------
-TRAIN_INPUT_DIR = '../allImages/train/noised/gaussian'  
+TRAIN_INPUT_DIR = '../allImages/train/noised/saltandpepper'  
 TRAIN_GT_DIR =    '../allImages/train/truth' 
-VAL_INPUT_DIR =   '../allImages/validation/noised/gaussian'  
+VAL_INPUT_DIR =   '../allImages/validation/noised/saltandpepper'  
 VAL_GT_DIR =      '../allImages/validation/truth'
-TEST_INPUT_DIR =  '../allImages/validation/noised/gaussian/test'
+TEST_INPUT_DIR =  '../allImages/validation/noised/saltandpepper/test'
 TEST_GT_DIR =     '../allImages/validation/truth/test'
 
 IMG_SIZE = (128, 128)
 
-BATCH_SIZE = 3
-NUM_EPOCHS = 3
+BATCH_SIZE = 8
+NUM_EPOCHS = 100
 LR = 1e-3
 SAVE_EVERY = 1
 NUM_WORKERS = 4
