@@ -15,11 +15,11 @@ def main(val_count=1000, train_count=None):
     os.makedirs(out_val_truth, exist_ok=True)
 
     batches = [
-        unpickle('../cifar-10-batches-py/data_batch_1')[b'data'],
-        unpickle('../cifar-10-batches-py/data_batch_2')[b'data'],
-        unpickle('../cifar-10-batches-py/data_batch_3')[b'data'],
-        unpickle('../cifar-10-batches-py/data_batch_4')[b'data'],
-        unpickle('../cifar-10-batches-py/data_batch_5')[b'data'],
+        unpickle('../data/cifar-10-batches-py/data_batch_1')[b'data'],
+        unpickle('../data/cifar-10-batches-py/data_batch_2')[b'data'],
+        unpickle('../data/cifar-10-batches-py/data_batch_3')[b'data'],
+        unpickle('../data/cifar-10-batches-py/data_batch_4')[b'data'],
+        unpickle('../data/cifar-10-batches-py/data_batch_5')[b'data'],
     ]
 
     arrays = [b.reshape(10000, 3, 32, 32).transpose(0, 2, 3, 1) for b in batches]

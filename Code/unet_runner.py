@@ -42,6 +42,12 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+import random
+
+def pick_random_indices(dataloader, num_samples=8):
+    total = len(dataloader.dataset)
+    return set(random.sample(range(total), k=min(num_samples, total)))
+
 # ------------------ CONFIG------------------
 TRAIN_INPUT_DIR = '../allImages/train/noised/saltandpepper'  
 TRAIN_GT_DIR =    '../allImages/train/truth' 
@@ -52,8 +58,8 @@ TEST_GT_DIR =     '../allImages/validation/truth/test'
 
 IMG_SIZE = (128, 128)
 
-BATCH_SIZE = 8
-NUM_EPOCHS = 100
+BATCH_SIZE = 16
+NUM_EPOCHS = 20
 LR = 1e-3
 SAVE_EVERY = 1
 NUM_WORKERS = 4
@@ -215,11 +221,16 @@ def train_one_epoch(model, loader, optimizer, loss_fn, device):
     return avg_loss
 
 
-def validate(model, loader, loss_fn, device, num_samples_to_save=4, sample_dir=None):
+def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=None):
     model.eval()
     running_loss = 0.0
     psnr_list = []
     saved = 0
+
+    global_idx = 0
+    num_samples_to_save = len(sample_indices) if sample_indices else 0
+
+
     with torch.no_grad():
         for inputs, gts, fnames in tqdm(loader, desc='val', leave=False):
             inputs = inputs.to(device)
@@ -232,18 +243,23 @@ def validate(model, loader, loss_fn, device, num_samples_to_save=4, sample_dir=N
             for i in range(preds_np.shape[0]):
                 psnr = compute_psnr(preds_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
                 psnr_list.append(psnr)
-            if sample_dir is not None and saved < num_samples_to_save:
-                for i in range(min(inputs.size(0), num_samples_to_save - saved)):
-                    in_img = tensor_to_uint8(inputs[i])
-                    pred_img = tensor_to_uint8(preds[i])
-                    gt_img = tensor_to_uint8(gts[i])
-                    base = os.path.splitext(fnames[i])[0]
-                    Image.fromarray(in_img).save(os.path.join(sample_dir, f'{base}_input.png'))
-                    Image.fromarray(pred_img).save(os.path.join(sample_dir, f'{base}_pred.png'))
-                    Image.fromarray(gt_img).save(os.path.join(sample_dir, f'{base}_gt.png'))
-                    saved += 1
+            if sample_dir is not None and sample_indices:
+                for i in range(inputs.size(0)):
+                    if global_idx in sample_indices:
+                        in_img = tensor_to_uint8(inputs[i])
+                        pred_img = tensor_to_uint8(preds[i])
+                        gt_img = tensor_to_uint8(gts[i])
+                        base = os.path.splitext(fnames[i])[0]
+
+                        Image.fromarray(in_img).save(os.path.join(sample_dir, f'{base}_input.png'))
+                        Image.fromarray(pred_img).save(os.path.join(sample_dir, f'{base}_pred.png'))
+                        Image.fromarray(gt_img).save(os.path.join(sample_dir, f'{base}_gt.png'))
+                        saved += 1
+
+                    global_idx += 1
                     if saved >= num_samples_to_save:
                         break
+
     avg_loss = running_loss / len(loader.dataset)
     avg_psnr = float(np.mean(psnr_list)) if len(psnr_list) else 0.0
     return avg_loss, avg_psnr
@@ -263,6 +279,9 @@ def run_training(train_input, train_gt, val_input, val_gt,
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=NUM_WORKERS)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS)
 
+    sample_indices = pick_random_indices(val_loader, num_samples=8)
+    print("Indices d'images sélectionnés pour cette session :", sample_indices)
+
     model = UNetModel(in_ch=3, out_ch=3).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
@@ -276,7 +295,15 @@ def run_training(train_input, train_gt, val_input, val_gt,
         # validation
         sample_epoch_dir = os.path.join(samples_dir, f'epoch_{epoch}')
         os.makedirs(sample_epoch_dir, exist_ok=True)
-        val_loss, val_psnr = validate(model, val_loader, loss_fn, device, num_samples_to_save=8, sample_dir=sample_epoch_dir)
+        val_loss, val_psnr = validate(
+            model,
+            val_loader,
+            loss_fn,
+            device,
+            sample_indices=sample_indices,
+            sample_dir=sample_epoch_dir
+        )
+
         print(f'  Val loss: {val_loss:.6f}, Val PSNR: {val_psnr:.3f} dB')
         history['train_loss'].append(train_loss)
         history['val_loss'].append(val_loss)

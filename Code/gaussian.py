@@ -3,7 +3,7 @@ import numpy as np
 import os
 
 
-def gaussNoise(image, sigma=10):
+def gaussNoise(image, sigma=25):
     img = image.astype(np.float32)
     gauss = np.random.normal(0, sigma, img.shape).astype(np.float32)
     noisy = img + gauss
@@ -36,9 +36,8 @@ def process():
             written = cv2.imwrite(out_path, noisy)
             if not written:
                 print(f"Error: impossible d'écrire '{out_path}'")
-            else:
-                print(f"Sauvegardé: {out_path}")
-
+            # else:
+            #     print(f"Sauvegardé: {out_path}")
 
 if __name__ == "__main__":
     process()

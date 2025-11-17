@@ -35,8 +35,8 @@ def process():
             written = cv2.imwrite(out_path, noisy)
             if not written:
                 print(f"Error: impossible d'écrire '{out_path}'")
-            else:
-                print(f"Sauvegardé: {out_path}")
+            # else:
+            #     print(f"Sauvegardé: {out_path}")
 
 
 if __name__ == '__main__':
