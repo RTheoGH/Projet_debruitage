@@ -37,12 +37,16 @@ def main():
 
     in_train_truth = [
         "../data/images128-128/bananes/data/train/banana/",
-        "../data/images128-128/orange/data/train/orange/"
+        "../data/images128-128/orange/data/train/orange/",
+        "../data/images128-128/llama/data/train/llama/",
+        "../data/images128-128/cliff/data/train/cliff/"
     ]
 
     in_val_truth = [
         "../data/images128-128/bananes/data/val/banana/",
-        "../data/images128-128/orange/data/val/orange/"
+        "../data/images128-128/orange/data/val/orange/",
+        "../data/images128-128/llama/data/val/llama/",
+        "../data/images128-128/cliff/data/val/cliff/"
     ]
 
     print("\n--- Copie TRAIN ---")
