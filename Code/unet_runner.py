@@ -49,11 +49,11 @@ def pick_random_indices(dataloader, num_samples=8):
     return set(random.sample(range(total), k=min(num_samples, total)))
 
 # ------------------ CONFIG------------------
-TRAIN_INPUT_DIR = '../allImages/train/noised/saltandpepper'  
+TRAIN_INPUT_DIR = '../allImages/train/noised/gaussian'  
 TRAIN_GT_DIR =    '../allImages/train/truth' 
-VAL_INPUT_DIR =   '../allImages/validation/noised/saltandpepper'  
+VAL_INPUT_DIR =   '../allImages/validation/noised/gaussian'  
 VAL_GT_DIR =      '../allImages/validation/truth'
-TEST_INPUT_DIR =  '../allImages/validation/noised/saltandpepper/test'
+TEST_INPUT_DIR =  '../allImages/validation/noised/gaussian/test'
 TEST_GT_DIR =     '../allImages/validation/truth/test'
 
 IMG_SIZE = (128, 128)
@@ -119,6 +119,65 @@ class PairedImageDataset(Dataset):
         t_gt = self.transform(img_gt)
         return t_in, t_gt, in_fname
 
+#-----------------------GAN--------------------------
+
+class SelfAttention(nn.Module):
+    def __init__(self, in_dim):
+        super().__init__()
+        self.query = nn.Conv2d(in_dim, in_dim // 8, 1)
+        self.key   = nn.Conv2d(in_dim, in_dim // 8, 1)
+        self.value = nn.Conv2d(in_dim, in_dim,      1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x):
+        B, C, H, W = x.size()
+        proj_query = self.query(x).view(B, -1, H * W)          # (B, C/8, HW)
+        proj_key   = self.key(x).view(B, -1, H * W)            # (B, C/8, HW)
+        energy     = torch.bmm(proj_query.permute(0, 2, 1), proj_key)  # (B, HW, HW)
+        attention  = F.softmax(energy, dim=-1)
+        proj_value = self.value(x).view(B, C, H * W)           # (B, C, HW)
+
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1)) # (B, C, HW)
+        out = out.view(B, C, H, W)
+        return self.gamma * out + x
+
+
+def disc_block(in_c, out_c, stride=2, use_bn=True):
+    layers = [nn.Conv2d(in_c, out_c, 4, stride=stride, padding=1)]
+    if use_bn:
+        layers.append(nn.BatchNorm2d(out_c))
+    layers.append(nn.LeakyReLU(0.2, inplace=True))
+    return nn.Sequential(*layers)
+
+
+class PatchGANDiscriminator(nn.Module):
+    def __init__(self, in_channels=3):
+        super().__init__()
+
+        channels = in_channels * 2
+
+        self.block1 = disc_block(channels, 64, use_bn=False) 
+        self.block2 = disc_block(64, 128)
+        self.block3 = disc_block(128, 256)
+
+        self.attn = SelfAttention(256)
+
+        self.block4 = disc_block(256, 512)
+        self.block5 = nn.Conv2d(512, 1, kernel_size=4, stride=1, padding=1)
+
+    def forward(self, x, y):
+        inp = torch.cat([x, y], dim=1)
+
+        h1 = self.block1(inp)
+        h2 = self.block2(h1)
+        h3 = self.block3(h2)
+
+        h3 = self.attn(h3)
+
+        h4 = self.block4(h3)
+        out = self.block5(h4)
+
+        return out          
 
 # ------------------ Model (UNet) ------------------
 class DoubleConv(nn.Module):
@@ -204,21 +263,54 @@ def tensor_to_uint8(img_tensor):
 
 # ------------------ Training & validation ------------------
 
-def train_one_epoch(model, loader, optimizer, loss_fn, device):
-    model.train()
+def train_one_epoch(G, D, loader, opt_G, opt_D, mse_loss, adv_loss, device):
+    G.train()
+    D.train()
     running_loss = 0.0
-    for batch in tqdm(loader, desc='train', leave=False):
-        inputs, gts, _ = batch
+
+    for inputs, gts, _ in tqdm(loader, desc='train', leave=False):
         inputs = inputs.to(device)
         gts = gts.to(device)
-        preds = model(inputs)
-        loss = loss_fn(preds, gts)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        running_loss += loss.item() * inputs.size(0)
-    avg_loss = running_loss / len(loader.dataset)
-    return avg_loss
+
+        # -------------------------------
+        # 1. Train Discriminator
+        # -------------------------------
+        preds = G(inputs).detach()
+
+        real_pred = D(inputs, gts)
+        fake_pred = D(inputs, preds)
+
+        real_labels = torch.ones_like(real_pred)
+        fake_labels = torch.zeros_like(fake_pred)
+
+        d_loss_real = adv_loss(real_pred, real_labels)
+        d_loss_fake = adv_loss(fake_pred, fake_labels)
+        d_loss = (d_loss_real + d_loss_fake) * 0.5
+
+        opt_D.zero_grad()
+        d_loss.backward()
+        opt_D.step()
+
+        # -------------------------------
+        # 2. Train Generator (U-Net)
+        # -------------------------------
+        preds = G(inputs)
+        fake_pred = D(inputs, preds)
+
+        g_adv = adv_loss(fake_pred, real_labels)           # adversarial loss
+        g_mse = mse_loss(preds, gts)                       # reconstruction
+        g_loss = g_mse + 0.001 * g_adv                     # équilibrage
+
+        opt_G.zero_grad()
+        g_loss.backward()
+        opt_G.step()
+
+        running_loss += g_mse.item() * inputs.size(0)
+
+    return running_loss / len(loader.dataset)
+
+
+
 
 
 def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=None):
@@ -283,16 +375,22 @@ def run_training(train_input, train_gt, val_input, val_gt,
     print("Indices d'images sélectionnés pour cette session :", sample_indices)
 
     model = UNetModel(in_ch=3, out_ch=3).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    discriminator = PatchGANDiscriminator().to(device)
+    opt_G = torch.optim.Adam(model.parameters(), lr=lr)
+    opt_D = torch.optim.Adam(discriminator.parameters(), lr=lr)
+
     loss_fn = nn.MSELoss()
+    adv_criterion = nn.BCEWithLogitsLoss()
 
     history = {'train_loss': [], 'val_loss': [], 'val_psnr': []}
 
     for epoch in range(1, num_epochs+1):
         print(f'Epoch {epoch}/{num_epochs} — training...')
-        train_loss = train_one_epoch(model, train_loader, optimizer, loss_fn, device)
+
+        train_loss = train_one_epoch(model,discriminator, train_loader, opt_G,opt_D, loss_fn,adv_criterion, device)
+
         print(f'  Train loss: {train_loss:.6f}')
-        # validation
+
         sample_epoch_dir = os.path.join(samples_dir, f'epoch_{epoch}')
         os.makedirs(sample_epoch_dir, exist_ok=True)
         val_loss, val_psnr = validate(
