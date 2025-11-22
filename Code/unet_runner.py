@@ -37,6 +37,7 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 import matplotlib
 matplotlib.use('Agg')
@@ -59,8 +60,9 @@ TEST_GT_DIR =     '../allImages/validation/truth/test'
 IMG_SIZE = (128, 128)
 
 BATCH_SIZE = 16
-NUM_EPOCHS = 20
-LR = 1e-3
+NUM_EPOCHS = 50
+LR = 0.0002
+L1_LAMBDA = 100.0
 SAVE_EVERY = 1
 NUM_WORKERS = 4
 
@@ -71,9 +73,12 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class PairedImageDataset(Dataset):
     """Load pairs of images (input, gt) from two folders. Filenames must match."""
-    def __init__(self, input_dir, gt_dir, img_size=(128,128), transform=None):
+    def __init__(self, input_dir, gt_dir, img_size=(128,128), augment=False):
         self.input_dir = input_dir
         self.gt_dir = gt_dir
+        self.augment = augment
+        self.img_size = img_size
+        
         def index_map(d):
             m = {}
             if not os.path.isdir(d):
@@ -97,14 +102,6 @@ class PairedImageDataset(Dataset):
             raise SystemExit(f'No matching numeric-indexed filenames found between {input_dir} and {gt_dir}.')
 
         self.pairs = [(in_map[k], gt_map[k]) for k in common]
-        self.img_size = img_size
-        if transform is None:
-            self.transform = transforms.Compose([
-                transforms.Resize(img_size),
-                transforms.ToTensor(),          
-            ])
-        else:
-            self.transform = transform
 
     def __len__(self):
         return len(self.pairs)
@@ -115,8 +112,29 @@ class PairedImageDataset(Dataset):
         p_gt = os.path.join(self.gt_dir, gt_fname)
         img_in = Image.open(p_in).convert('RGB')
         img_gt = Image.open(p_gt).convert('RGB')
-        t_in = self.transform(img_in)
-        t_gt = self.transform(img_gt)
+
+        if img_in.size[0] < self.img_size[0] or img_in.size[1] < self.img_size[1]:
+            img_in = TF.resize(img_in, self.img_size)
+            img_gt = TF.resize(img_gt, self.img_size)
+
+        if self.augment:
+            i, j, h, w = transforms.RandomCrop.get_params(img_in, output_size=self.img_size)
+            img_in = TF.crop(img_in, i, j, h, w)
+            img_gt = TF.crop(img_gt, i, j, h, w)
+
+            if random.random() > 0.5:
+                img_in = TF.hflip(img_in)
+                img_gt = TF.hflip(img_gt)
+        else:
+            img_in = TF.center_crop(img_in, self.img_size)
+            img_gt = TF.center_crop(img_gt, self.img_size)
+
+        t_in = TF.to_tensor(img_in)
+        t_gt = TF.to_tensor(img_gt)
+
+        t_in = TF.normalize(t_in, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        t_gt = TF.normalize(t_gt, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        
         return t_in, t_gt, in_fname
 
 #-----------------------GAN--------------------------
@@ -131,13 +149,13 @@ class SelfAttention(nn.Module):
 
     def forward(self, x):
         B, C, H, W = x.size()
-        proj_query = self.query(x).view(B, -1, H * W)          # (B, C/8, HW)
-        proj_key   = self.key(x).view(B, -1, H * W)            # (B, C/8, HW)
-        energy     = torch.bmm(proj_query.permute(0, 2, 1), proj_key)  # (B, HW, HW)
+        proj_query = self.query(x).view(B, -1, H * W)
+        proj_key   = self.key(x).view(B, -1, H * W)        
+        energy     = torch.bmm(proj_query.permute(0, 2, 1), proj_key)
         attention  = F.softmax(energy, dim=-1)
-        proj_value = self.value(x).view(B, C, H * W)           # (B, C, HW)
+        proj_value = self.value(x).view(B, C, H * W)        
 
-        out = torch.bmm(proj_value, attention.permute(0, 2, 1)) # (B, C, HW)
+        out = torch.bmm(proj_value, attention.permute(0, 2, 1))
         out = out.view(B, C, H, W)
         return self.gamma * out + x
 
@@ -186,10 +204,10 @@ class DoubleConv(nn.Module):
         self.net = nn.Sequential(
             nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
+            nn.LeakyReLU(0.2, inplace=True),
         )
     def forward(self, x):
         return self.net(x)
@@ -244,7 +262,7 @@ class UNetModel(nn.Module):
         x = self.up3(x, x2)
         x = self.up4(x, x1)
         x = self.outc(x)
-        x = torch.sigmoid(x)
+        x = torch.tanh(x)
         return x
 
 # ------------------ Metrics & helpers ------------------
@@ -257,13 +275,14 @@ def compute_psnr(img1, img2, max_val=1.0):
 
 def tensor_to_uint8(img_tensor):
     img = img_tensor.detach().cpu().numpy()
+    img = (img * 0.5) + 0.5
     img = np.clip(img * 255.0, 0, 255).astype(np.uint8)
     img = np.transpose(img, (1,2,0))
     return img
 
 # ------------------ Training & validation ------------------
 
-def train_one_epoch(G, D, loader, opt_G, opt_D, mse_loss, adv_loss, device):
+def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, adv_loss, device):
     G.train()
     D.train()
     running_loss = 0.0
@@ -291,27 +310,23 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, mse_loss, adv_loss, device):
         d_loss.backward()
         opt_D.step()
 
-        # -------------------------------
-        # 2. Train Generator (U-Net)
-        # -------------------------------
+        # -------------------
+        # 2. Train Generator 
+        # -------------------
         preds = G(inputs)
         fake_pred = D(inputs, preds)
 
-        g_adv = adv_loss(fake_pred, real_labels)           # adversarial loss
-        g_mse = mse_loss(preds, gts)                       # reconstruction
-        g_loss = g_mse + 0.001 * g_adv                     # équilibrage
+        g_adv = adv_loss(fake_pred, real_labels)           
+        g_pixel = pixel_loss(preds, gts)                  
+        g_loss = g_pixel * L1_LAMBDA + g_adv             
 
         opt_G.zero_grad()
         g_loss.backward()
         opt_G.step()
 
-        running_loss += g_mse.item() * inputs.size(0)
+        running_loss += g_pixel.item() * inputs.size(0)
 
     return running_loss / len(loader.dataset)
-
-
-
-
 
 def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=None):
     model.eval()
@@ -330,8 +345,9 @@ def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=Non
             preds = model(inputs)
             loss = loss_fn(preds, gts)
             running_loss += loss.item() * inputs.size(0)
-            preds_np = preds.cpu().numpy()
-            gts_np = gts.cpu().numpy()
+
+            preds_np = (preds.cpu().numpy() + 1.0) / 2.0
+            gts_np = (gts.cpu().numpy() + 1.0) / 2.0
             for i in range(preds_np.shape[0]):
                 psnr = compute_psnr(preds_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
                 psnr_list.append(psnr)
@@ -365,8 +381,8 @@ def run_training(train_input, train_gt, val_input, val_gt,
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(samples_dir, exist_ok=True)
 
-    train_ds = PairedImageDataset(train_input, train_gt, img_size)
-    val_ds = PairedImageDataset(val_input, val_gt, img_size)
+    train_ds = PairedImageDataset(train_input, train_gt, img_size, augment=True)
+    val_ds = PairedImageDataset(val_input, val_gt, img_size, augment=False)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=NUM_WORKERS)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS)
@@ -376,10 +392,21 @@ def run_training(train_input, train_gt, val_input, val_gt,
 
     model = UNetModel(in_ch=3, out_ch=3).to(device)
     discriminator = PatchGANDiscriminator().to(device)
-    opt_G = torch.optim.Adam(model.parameters(), lr=lr)
-    opt_D = torch.optim.Adam(discriminator.parameters(), lr=lr)
+    opt_G = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999))
+    opt_D = torch.optim.Adam(discriminator.parameters(), lr=lr, betas=(0.5, 0.999))
 
-    loss_fn = nn.MSELoss()
+    def lambda_rule(epoch):
+        start_decay = num_epochs // 2
+        decay_len = num_epochs - start_decay
+        if epoch < start_decay:
+            return 1.0
+        else:
+            return 1.0 - float(epoch - start_decay) / float(decay_len + 1)
+
+    sched_G = torch.optim.lr_scheduler.LambdaLR(opt_G, lr_lambda=lambda_rule)
+    sched_D = torch.optim.lr_scheduler.LambdaLR(opt_D, lr_lambda=lambda_rule)
+
+    loss_fn = nn.L1Loss()
     adv_criterion = nn.BCEWithLogitsLoss()
 
     history = {'train_loss': [], 'val_loss': [], 'val_psnr': []}
@@ -406,13 +433,15 @@ def run_training(train_input, train_gt, val_input, val_gt,
         history['train_loss'].append(train_loss)
         history['val_loss'].append(val_loss)
         history['val_psnr'].append(val_psnr)
-        # save checkpoint
+
         if epoch % SAVE_EVERY == 0 or epoch == num_epochs:
             ckpt_path = os.path.join(checkpoint_dir, f'unet_epoch_{epoch}.pt')
             torch.save(model.state_dict(), ckpt_path)
             print('  Saved checkpoint', ckpt_path)
+        
+        sched_G.step()
+        sched_D.step()
 
-    # final plot
     plt.figure()
     plt.plot(range(1, len(history['train_loss'])+1), history['train_loss'], label='train_loss')
     plt.plot(range(1, len(history['val_loss'])+1), history['val_loss'], label='val_loss')
