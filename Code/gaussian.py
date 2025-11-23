@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import os
 
-
 def gaussNoise(image, sigma=25):
     img = image.astype(np.float32)
     gauss = np.random.normal(0, sigma, img.shape).astype(np.float32)
