@@ -438,6 +438,9 @@ def run_training(train_input, train_gt, val_input, val_gt,
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=NUM_WORKERS)
 
     sample_indices = pick_random_indices(val_loader, num_samples=8)
+    # start_idx = 1000
+    # num_samples = 8
+    # sample_indices = set(range(start_idx, min(start_idx + num_samples, len(val_ds))))
     print("Indices d'images sélectionnés pour cette session :", sample_indices)
 
     model = UNetModel(in_ch=3, out_ch=3).to(device)
