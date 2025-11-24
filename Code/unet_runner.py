@@ -50,17 +50,17 @@ def pick_random_indices(dataloader, num_samples=8):
     return set(random.sample(range(total), k=min(num_samples, total)))
 
 # ------------------ CONFIG------------------
-TRAIN_INPUT_DIR = '../allImages/train/noised/saltandpepper'  
+TRAIN_INPUT_DIR = '../allImages/train/noised/gaussian'  
 TRAIN_GT_DIR =    '../allImages/train/truth' 
-VAL_INPUT_DIR =   '../allImages/validation/noised/saltandpepper'  
+VAL_INPUT_DIR =   '../allImages/validation/noised/gaussian'  
 VAL_GT_DIR =      '../allImages/validation/truth'
-TEST_INPUT_DIR =  '../allImages/validation/noised/saltandpepper/test'
+TEST_INPUT_DIR =  '../allImages/validation/noised/gaussian/test'
 TEST_GT_DIR =     '../allImages/validation/truth/test'
 
 IMG_SIZE = (128, 128)
 
-BATCH_SIZE = 16
-NUM_EPOCHS = 50
+BATCH_SIZE = 64
+NUM_EPOCHS = 5
 LR = 0.0002
 L1_LAMBDA = 100.0
 SAVE_EVERY = 1
@@ -272,6 +272,25 @@ def compute_psnr(img1, img2, max_val=1.0):
         return float('inf')
     return 20 * log10(max_val / sqrt(mse))
 
+def compute_ssim(img1, img2, window_size=11):
+    img1 = img1.unsqueeze(0)
+    img2 = img2.unsqueeze(0)
+
+    mu1 = F.avg_pool2d(img1, window_size, 1, window_size//2)
+    mu2 = F.avg_pool2d(img2, window_size, 1, window_size//2)
+
+    sigma1 = F.avg_pool2d(img1*img1, window_size, 1, window_size//2) - mu1**2
+    sigma2 = F.avg_pool2d(img2*img2, window_size, 1, window_size//2) - mu2**2
+    sigma12 = F.avg_pool2d(img1*img2, window_size, 1, window_size//2) - mu1*mu2
+
+    C1 = 0.01**2
+    C2 = 0.03**2
+
+    num = (2*mu1*mu2 + C1) * (2*sigma12 + C2)
+    den = (mu1**2 + mu2**2 + C1) * (sigma1 + sigma2 + C2)
+
+    ssim_map = num / den
+    return ssim_map.mean().item()
 
 def tensor_to_uint8(img_tensor):
     img = img_tensor.detach().cpu().numpy()
@@ -331,7 +350,9 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, adv_loss, device):
 def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=None):
     model.eval()
     running_loss = 0.0
-    psnr_list = []
+    psnr_list_deb = []
+    psnr_list_noisy = []
+    ssim_list = []
     saved = 0
 
     global_idx = 0
@@ -347,10 +368,19 @@ def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=Non
             running_loss += loss.item() * inputs.size(0)
 
             preds_np = (preds.cpu().numpy() + 1.0) / 2.0
+            inputs_np = (inputs.cpu().numpy() + 1.0) / 2.0
             gts_np = (gts.cpu().numpy() + 1.0) / 2.0
             for i in range(preds_np.shape[0]):
+                psnr_noisy = compute_psnr(inputs_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
+                psnr_list_noisy.append(psnr_noisy)
+
                 psnr = compute_psnr(preds_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
-                psnr_list.append(psnr)
+                psnr_list_deb.append(psnr)
+
+                pred_t = torch.tensor(preds_np[i])
+                gt_t   = torch.tensor(gts_np[i])
+                ssim = compute_ssim(pred_t, gt_t)
+                ssim_list.append(ssim)
             if sample_dir is not None and sample_indices:
                 for i in range(inputs.size(0)):
                     if global_idx in sample_indices:
@@ -369,8 +399,10 @@ def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=Non
                         break
 
     avg_loss = running_loss / len(loader.dataset)
-    avg_psnr = float(np.mean(psnr_list)) if len(psnr_list) else 0.0
-    return avg_loss, avg_psnr
+    avg_psnr_noise = float(np.mean(psnr_list_noisy)) if len(psnr_list_noisy) else 0.0
+    avg_psnr_deb = float(np.mean(psnr_list_deb)) if len(psnr_list_deb) else 0.0
+    avg_ssim = float(np.mean(ssim_list)) if ssim_list else 0.0
+    return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim
 
 # ------------------ Main runner ------------------
 
@@ -409,7 +441,7 @@ def run_training(train_input, train_gt, val_input, val_gt,
     loss_fn = nn.L1Loss()
     adv_criterion = nn.BCEWithLogitsLoss()
 
-    history = {'train_loss': [], 'val_loss': [], 'val_psnr': []}
+    history = {'train_loss': [], 'val_loss': [], 'val_psnr_before': [],'val_psnr_after': []}
 
     for epoch in range(1, num_epochs+1):
         print(f'Epoch {epoch}/{num_epochs} — training...')
@@ -420,7 +452,7 @@ def run_training(train_input, train_gt, val_input, val_gt,
 
         sample_epoch_dir = os.path.join(samples_dir, f'epoch_{epoch}')
         os.makedirs(sample_epoch_dir, exist_ok=True)
-        val_loss, val_psnr = validate(
+        val_loss, val_psnr_before, val_psnr_after, val_ssim = validate(
             model,
             val_loader,
             loss_fn,
@@ -429,10 +461,12 @@ def run_training(train_input, train_gt, val_input, val_gt,
             sample_dir=sample_epoch_dir
         )
 
-        print(f'  Val loss: {val_loss:.6f}, Val PSNR: {val_psnr:.3f} dB')
+        print(f'  Val loss: {val_loss:.6f},\n Val PSNR before: {val_psnr_before:.3f} dB,\n Val PSNR after: {val_psnr_after:.3f} dB,\n Val SSIM : {val_ssim:.4f}')
         history['train_loss'].append(train_loss)
         history['val_loss'].append(val_loss)
-        history['val_psnr'].append(val_psnr)
+        history['val_psnr_before'].append(val_psnr_before)
+        history['val_psnr_after'].append(val_psnr_after)
+        history.setdefault('val_ssim', []).append(val_ssim)
 
         if epoch % SAVE_EVERY == 0 or epoch == num_epochs:
             ckpt_path = os.path.join(checkpoint_dir, f'unet_epoch_{epoch}.pt')
