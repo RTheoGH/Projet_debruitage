@@ -42,6 +42,7 @@ import torch.nn.functional as F
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from DISTS_pt import DISTS
 
 import random
 
@@ -347,12 +348,16 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, adv_loss, device):
 
     return running_loss / len(loader.dataset)
 
+
 def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=None):
     model.eval()
     running_loss = 0.0
     psnr_list_deb = []
     psnr_list_noisy = []
     ssim_list = []
+    dists_list = []
+    dists_model = DISTS().to(device)
+
     saved = 0
 
     global_idx = 0
@@ -376,6 +381,17 @@ def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=Non
 
                 psnr = compute_psnr(preds_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
                 psnr_list_deb.append(psnr)
+
+
+                pred_t = torch.from_numpy(preds_np[i]).float().to(device)
+                gt_t   = torch.from_numpy(gts_np[i]).float().to(device)
+
+                pred_t = pred_t.unsqueeze(0)
+                gt_t   = gt_t.unsqueeze(0)
+
+                dists_value = dists_model(pred_t, gt_t).item()
+
+                dists_list.append(dists_value)
 
                 pred_t = torch.tensor(preds_np[i])
                 gt_t   = torch.tensor(gts_np[i])
@@ -402,7 +418,9 @@ def validate(model, loader, loss_fn, device, sample_indices=None, sample_dir=Non
     avg_psnr_noise = float(np.mean(psnr_list_noisy)) if len(psnr_list_noisy) else 0.0
     avg_psnr_deb = float(np.mean(psnr_list_deb)) if len(psnr_list_deb) else 0.0
     avg_ssim = float(np.mean(ssim_list)) if ssim_list else 0.0
-    return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim
+    avg_dist = float(np.mean(dists_list)) if len(dists_list) else 0.0
+
+    return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim,avg_dist
 
 # ------------------ Main runner ------------------
 
@@ -452,7 +470,7 @@ def run_training(train_input, train_gt, val_input, val_gt,
 
         sample_epoch_dir = os.path.join(samples_dir, f'epoch_{epoch}')
         os.makedirs(sample_epoch_dir, exist_ok=True)
-        val_loss, val_psnr_before, val_psnr_after, val_ssim = validate(
+        val_loss, val_psnr_before, val_psnr_after, val_ssim, val_dist = validate(
             model,
             val_loader,
             loss_fn,
@@ -461,7 +479,7 @@ def run_training(train_input, train_gt, val_input, val_gt,
             sample_dir=sample_epoch_dir
         )
 
-        print(f'  Val loss: {val_loss:.6f},\n Val PSNR before: {val_psnr_before:.3f} dB,\n Val PSNR after: {val_psnr_after:.3f} dB,\n Val SSIM : {val_ssim:.4f}')
+        print(f'  Val loss: {val_loss:.6f},\n Val PSNR before: {val_psnr_before:.3f} dB,\n Val PSNR after: {val_psnr_after:.3f} dB,\n Val SSIM : {val_ssim:.4f}, \n Val DISTS : {val_dist:.5f}')
         history['train_loss'].append(train_loss)
         history['val_loss'].append(val_loss)
         history['val_psnr_before'].append(val_psnr_before)
