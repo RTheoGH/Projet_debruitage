@@ -60,8 +60,8 @@ TEST_GT_DIR =     '../allImages/validation/truth/test'
 
 IMG_SIZE = (128, 128)
 
-BATCH_SIZE = 64
-NUM_EPOCHS = 5
+BATCH_SIZE = 32
+NUM_EPOCHS = 40
 LR = 0.0002
 L1_LAMBDA = 100.0
 SAVE_EVERY = 1
@@ -198,6 +198,16 @@ class PatchGANDiscriminator(nn.Module):
 
         return out          
 
+
+def hinge_d_loss(real_pred, fake_pred):
+    loss_real = torch.relu(1 - real_pred).mean()
+    loss_fake = torch.relu(1 + fake_pred).mean()
+    return loss_real + loss_fake
+
+def hinge_g_loss(fake_pred):
+    return -fake_pred.mean()
+
+
 # ------------------ Model (UNet) ------------------
 class DoubleConv(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -302,7 +312,7 @@ def tensor_to_uint8(img_tensor):
 
 # ------------------ Training & validation ------------------
 
-def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, adv_loss, device):
+def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device):
     G.train()
     D.train()
     running_loss = 0.0
@@ -319,12 +329,7 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, adv_loss, device):
         real_pred = D(inputs, gts)
         fake_pred = D(inputs, preds)
 
-        real_labels = torch.ones_like(real_pred)
-        fake_labels = torch.zeros_like(fake_pred)
-
-        d_loss_real = adv_loss(real_pred, real_labels)
-        d_loss_fake = adv_loss(fake_pred, fake_labels)
-        d_loss = (d_loss_real + d_loss_fake) * 0.5
+        d_loss = hinge_d_loss(real_pred, fake_pred)
 
         opt_D.zero_grad()
         d_loss.backward()
@@ -336,9 +341,9 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, adv_loss, device):
         preds = G(inputs)
         fake_pred = D(inputs, preds)
 
-        g_adv = adv_loss(fake_pred, real_labels)           
-        g_pixel = pixel_loss(preds, gts)                  
-        g_loss = g_pixel * L1_LAMBDA + g_adv             
+        g_adv = hinge_g_loss(fake_pred)
+        g_pixel = pixel_loss(preds, gts)
+        g_loss = g_pixel * L1_LAMBDA + g_adv
 
         opt_G.zero_grad()
         g_loss.backward()
@@ -457,14 +462,13 @@ def run_training(train_input, train_gt, val_input, val_gt,
     sched_D = torch.optim.lr_scheduler.LambdaLR(opt_D, lr_lambda=lambda_rule)
 
     loss_fn = nn.L1Loss()
-    adv_criterion = nn.BCEWithLogitsLoss()
 
     history = {'train_loss': [], 'val_loss': [], 'val_psnr_before': [],'val_psnr_after': []}
 
     for epoch in range(1, num_epochs+1):
         print(f'Epoch {epoch}/{num_epochs} — training...')
 
-        train_loss = train_one_epoch(model,discriminator, train_loader, opt_G,opt_D, loss_fn,adv_criterion, device)
+        train_loss = train_one_epoch(model,discriminator, train_loader, opt_G,opt_D, loss_fn, device)
 
         print(f'  Train loss: {train_loss:.6f}')
 
