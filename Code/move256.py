@@ -36,11 +36,15 @@ def main():
     os.makedirs(out_val_truth, exist_ok=True)
 
     in_train_truth = [
-        "../data/images256-256/chat/data/train/egyptian_cat/"
+        "../data/images256-256/chat/data/train/egyptian_cat/",
+        "../data/images256-256/hare/data/train/hare/",
+        "../data/images256-256/weasel/data/train/weasel/"
     ]
 
     in_val_truth = [
-        "../data/images256-256/chat/data/val/egyptian_cat/"
+        "../data/images256-256/chat/data/val/egyptian_cat/",
+        "../data/images256-256/hare/data/val/hare/",
+        "../data/images256-256/weasel/data/val/weasel/"
     ]
 
     print("\n--- Copie TRAIN ---")

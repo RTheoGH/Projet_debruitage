@@ -3,9 +3,9 @@ import cv2
 import os
 
 
-def noise_poisson(image):
+def noise_poisson(image, strength=150):
     img = image.astype(np.float32)
-    noisy = np.random.poisson(img / 255.0 * 100) / 100.0 * 255.0
+    noisy = np.random.poisson(img / 255.0 * strength) / strength * 255.0
     noisy = np.clip(noisy, 0, 255).astype(np.uint8)
     return noisy
 
