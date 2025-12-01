@@ -68,28 +68,18 @@ TEST_GT_DIR =     '../allImages/validation/truth/test'
 
 
 
-# PRETRAIN_EPOCHS = 10
-# L1_BASE = 80.0
-# L1_FINAL = 40.0
-# LAMBDA_PERCEPTUAL = 0.02
-# LAMBDA_FM = 0.03
-# LAMBDA_ADV = 0.5 
-# LR = 0.0002
-# LR_D = 0.00004
-# L1_LAMBDA = 25.0
-
-
 #PARAM LES PLUS OPTI POUR L'INSTANT
 
-PRETRAIN_EPOCHS = 20
-L1_BASE = 100.0
-L1_FINAL = 40.0
-LAMBDA_PERCEPTUAL = 0.02
-LAMBDA_FM = 0.02
-LAMBDA_ADV = 0.2
-LR = 0.0002
-LR_D = 0.00004
-L1_LAMBDA = 25.0
+PRETRAIN_EPOCHS = 18          
+L1_BASE = 80.0                
+L1_FINAL = 30.0               
+LAMBDA_PERCEPTUAL = 0.01      
+LAMBDA_FM = 0.005           
+LAMBDA_ADV = 0.005
+LR = 0.00015                  
+LR_D = 0.00005              
+L1_LAMBDA = 25.0          
+
 
 RESIDUAL_LEARNING = True
 IMG_SIZE = (128, 128)
@@ -267,6 +257,195 @@ def hinge_d_loss(real_pred, fake_pred):
 def hinge_g_loss(fake_pred):
     return -fake_pred.mean()
 
+#------------------------------
+
+@torch.no_grad()
+def init_weights(init_type='xavier'):
+    if init_type == 'xavier':
+        init = nn.init.xavier_normal_
+    elif init_type == 'he':
+        init = nn.init.kaiming_normal_
+    else:
+        init = nn.init.orthogonal_
+
+    def initializer(m):
+        classname = m.__class__.__name__
+        if classname.find('Conv2d') != -1:
+            init(m.weight)
+        elif classname.find('BatchNorm') != -1:
+            nn.init.normal_(m.weight, 1.0, 0.01)
+            nn.init.zeros_(m.bias)
+
+    return initializer
+
+
+class DownsampleBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(DownsampleBlock, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=2, stride=2)
+        self.actv = nn.PReLU(out_channels)
+
+    def forward(self, x):
+        return self.actv(self.conv(x))
+
+
+class UpsampleBlock(nn.Module):
+    def __init__(self, in_channels, cat_channels, out_channels):
+        super(UpsampleBlock, self).__init__()
+
+        self.conv = nn.Conv2d(in_channels + cat_channels, out_channels, 3, padding=1)
+        self.conv_t = nn.ConvTranspose2d(in_channels, in_channels, 2, stride=2)
+        self.actv = nn.PReLU(out_channels)
+        self.actv_t = nn.PReLU(in_channels)
+
+    def forward(self, x):
+        upsample, concat = x
+        upsample = self.actv_t(self.conv_t(upsample))
+        return self.actv(self.conv(torch.cat([concat, upsample], 1)))
+
+
+class InputBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(InputBlock, self).__init__()
+        self.conv_1 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+        self.conv_2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+
+        self.actv_1 = nn.PReLU(out_channels)
+        self.actv_2 = nn.PReLU(out_channels)
+
+    def forward(self, x):
+        x = self.actv_1(self.conv_1(x))
+        return self.actv_2(self.conv_2(x))
+
+
+class OutputBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(OutputBlock, self).__init__()
+        self.conv_1 = nn.Conv2d(in_channels, in_channels, 3, padding=1)
+        self.conv_2 = nn.Conv2d(in_channels, out_channels, 3, padding=1)
+
+        self.actv_1 = nn.PReLU(in_channels)
+        self.actv_2 = nn.PReLU(out_channels)
+
+    def forward(self, x):
+        x = self.actv_1(self.conv_1(x))
+        return self.actv_2(self.conv_2(x))
+
+
+class DenoisingBlock(nn.Module):
+    def __init__(self, in_channels, inner_channels, out_channels):
+        super(DenoisingBlock, self).__init__()
+        self.conv_0 = nn.Conv2d(in_channels, inner_channels, 3, padding=1)
+        self.conv_1 = nn.Conv2d(in_channels + inner_channels, inner_channels, 3, padding=1)
+        self.conv_2 = nn.Conv2d(in_channels + 2 * inner_channels, inner_channels, 3, padding=1)
+        self.conv_3 = nn.Conv2d(in_channels + 3 * inner_channels, out_channels, 3, padding=1)
+
+        self.actv_0 = nn.PReLU(inner_channels)
+        self.actv_1 = nn.PReLU(inner_channels)
+        self.actv_2 = nn.PReLU(inner_channels)
+        self.actv_3 = nn.PReLU(out_channels)
+
+    def forward(self, x):
+        out_0 = self.actv_0(self.conv_0(x))
+
+        out_0 = torch.cat([x, out_0], 1)
+        out_1 = self.actv_1(self.conv_1(out_0))
+
+        out_1 = torch.cat([out_0, out_1], 1)
+        out_2 = self.actv_2(self.conv_2(out_1))
+
+        out_2 = torch.cat([out_1, out_2], 1)
+        out_3 = self.actv_3(self.conv_3(out_2))
+
+        return out_3 + x
+
+
+class RDUNet(nn.Module):
+    r"""
+    Residual-Dense U-net for image denoising.
+    """
+    def __init__(self, **kwargs):
+        super().__init__()
+
+        channels = kwargs['channels']
+        filters_0 = kwargs['base filters']
+        filters_1 = 2 * filters_0
+        filters_2 = 4 * filters_0
+        filters_3 = 8 * filters_0
+
+        # Encoder:
+        # Level 0:
+        self.input_block = InputBlock(channels, filters_0)
+        self.block_0_0 = DenoisingBlock(filters_0, filters_0 // 2, filters_0)
+        self.block_0_1 = DenoisingBlock(filters_0, filters_0 // 2, filters_0)
+        self.down_0 = DownsampleBlock(filters_0, filters_1)
+
+        # Level 1:
+        self.block_1_0 = DenoisingBlock(filters_1, filters_1 // 2, filters_1)
+        self.block_1_1 = DenoisingBlock(filters_1, filters_1 // 2, filters_1)
+        self.down_1 = DownsampleBlock(filters_1, filters_2)
+
+        # Level 2:
+        self.block_2_0 = DenoisingBlock(filters_2, filters_2 // 2, filters_2)
+        self.block_2_1 = DenoisingBlock(filters_2, filters_2 // 2, filters_2)
+        self.down_2 = DownsampleBlock(filters_2, filters_3)
+
+        # Level 3 (Bottleneck)
+        self.block_3_0 = DenoisingBlock(filters_3, filters_3 // 2, filters_3)
+        self.block_3_1 = DenoisingBlock(filters_3, filters_3 // 2, filters_3)
+
+        # Decoder
+        # Level 2:
+        self.up_2 = UpsampleBlock(filters_3, filters_2, filters_2)
+        self.block_2_2 = DenoisingBlock(filters_2, filters_2 // 2, filters_2)
+        self.block_2_3 = DenoisingBlock(filters_2, filters_2 // 2, filters_2)
+
+        # Level 1:
+        self.up_1 = UpsampleBlock(filters_2, filters_1, filters_1)
+        self.block_1_2 = DenoisingBlock(filters_1, filters_1 // 2, filters_1)
+        self.block_1_3 = DenoisingBlock(filters_1, filters_1 // 2, filters_1)
+
+        # Level 0:
+        self.up_0 = UpsampleBlock(filters_1, filters_0, filters_0)
+        self.block_0_2 = DenoisingBlock(filters_0, filters_0 // 2, filters_0)
+        self.block_0_3 = DenoisingBlock(filters_0, filters_0 // 2, filters_0)
+
+        self.output_block = OutputBlock(filters_0, channels)
+
+    def forward(self, inputs):
+        out_0 = self.input_block(inputs)    # Level 0
+        out_0 = self.block_0_0(out_0)
+        out_0 = self.block_0_1(out_0)
+
+        out_1 = self.down_0(out_0)          # Level 1
+        out_1 = self.block_1_0(out_1)
+        out_1 = self.block_1_1(out_1)
+
+        out_2 = self.down_1(out_1)          # Level 2
+        out_2 = self.block_2_0(out_2)
+        out_2 = self.block_2_1(out_2)
+
+        out_3 = self.down_2(out_2)          # Level 3 (Bottleneck)
+        out_3 = self.block_3_0(out_3)
+        out_3 = self.block_3_1(out_3)
+
+        out_4 = self.up_2([out_3, out_2])   # Level 2
+        out_4 = self.block_2_2(out_4)
+        out_4 = self.block_2_3(out_4)
+
+        out_5 = self.up_1([out_4, out_1])   # Level 1
+        out_5 = self.block_1_2(out_5)
+        out_5 = self.block_1_3(out_5)
+
+        out_6 = self.up_0([out_5, out_0])   # Level 0
+        out_6 = self.block_0_2(out_6)
+        out_6 = self.block_0_3(out_6)
+
+        return torch.tanh(self.output_block(out_6) + inputs)
+
+
+
+#-----------------------------
 
 
 class DoubleConv(nn.Module):
@@ -375,6 +554,86 @@ def tensor_to_uint8(img_tensor):
     img = np.transpose(img, (1,2,0))
     return img
 
+# def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
+#                     current_l1= L1_BASE,
+#                     vgg_model=None,
+#                     use_fm=True,
+#                     use_adv=True,
+#                     train_d=True,
+#                     lambda_adv=LAMBDA_ADV,
+#                     lambda_fm=LAMBDA_FM,
+#                     lambda_perc=LAMBDA_PERCEPTUAL):
+#     G.train()
+#     D.train()
+#     running_loss = 0.0
+
+#     for inputs, gts, _ in tqdm(loader, desc='train', leave=False):
+#         inputs = inputs.to(device)
+#         gts = gts.to(device)
+
+#         # -------------------------------
+#         # 1. Train Discriminator
+#         # -------------------------------
+#         if train_d:
+#             with torch.no_grad():
+#                 preds = G(inputs).detach()
+
+#             real_pred = D(inputs, gts)
+#             fake_pred = D(inputs, preds)
+
+#             d_loss = hinge_d_loss(real_pred, fake_pred)
+
+#             opt_D.zero_grad()
+#             d_loss.backward()
+#             opt_D.step()
+
+#         # -------------------
+#         # 2. Train Generator
+#         # -------------------
+#         preds = G(inputs)
+        
+#         if use_adv:
+#             fake_pred = D(inputs, preds)
+#             g_adv = hinge_g_loss(fake_pred) * lambda_adv
+#         else:
+#             g_adv = torch.tensor(0.0, device=device)
+
+#         g_pixel = pixel_loss(preds, gts) * current_l1
+
+#         perc_loss = torch.tensor(0.0, device=device)
+#         if vgg_model is not None:
+#             preds_v = (preds + 1.0) / 2.0
+#             gts_v = (gts + 1.0) / 2.0
+#             mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1,3,1,1)
+#             std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1,3,1,1)
+#             preds_norm = (preds_v - mean) / std
+#             gts_norm = (gts_v - mean) / std
+#             with torch.no_grad():
+#                 feat_pred = vgg_model(preds_norm)
+#                 feat_gt = vgg_model(gts_norm)
+#             perc_loss = F.l1_loss(feat_pred, feat_gt) * lambda_perc
+
+#         fm_loss = torch.tensor(0.0, device=device)
+#         if use_fm:
+#             real_feats = D.get_feats(inputs, gts)
+#             fake_feats = D.get_feats(inputs, preds)
+#             fm_loss = 0.0
+#             for rf, ff in zip(real_feats, fake_feats):
+#                 fm_loss = fm_loss + F.l1_loss(ff, rf.detach())
+#             fm_loss = fm_loss * lambda_fm
+
+#         g_loss = g_pixel + g_adv + perc_loss + fm_loss
+
+#         opt_G.zero_grad()
+#         g_loss.backward()
+#         opt_G.step()
+
+#         running_loss += g_pixel.item() * inputs.size(0)
+
+#     return running_loss / len(loader.dataset)
+
+
+
 def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
                     current_l1= L1_BASE,
                     vgg_model=None,
@@ -384,43 +643,59 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
                     lambda_adv=LAMBDA_ADV,
                     lambda_fm=LAMBDA_FM,
                     lambda_perc=LAMBDA_PERCEPTUAL):
+    """
+    Train for one epoch with protections:
+    - D is only used (forward/backward) when use_adv or use_fm or train_d is True.
+    - When GAN is fully off, D is set to eval() and not called at all.
+    - Feature-matching computes real_feats with torch.no_grad() and fake_feats with grad so gradients flow to G only.
+    """
     G.train()
-    D.train()
+
+    if train_d or use_adv or use_fm:
+        D.train()
+    else:
+        D.eval()
+
     running_loss = 0.0
 
     for inputs, gts, _ in tqdm(loader, desc='train', leave=False):
         inputs = inputs.to(device)
         gts = gts.to(device)
 
-        # -------------------------------
+        # -----------------------
         # 1. Train Discriminator
-        # -------------------------------
+        # -----------------------
         if train_d:
             with torch.no_grad():
-                preds = G(inputs).detach()
+                preds_for_d = G(inputs).detach()
 
             real_pred = D(inputs, gts)
-            fake_pred = D(inputs, preds)
+            fake_pred = D(inputs, preds_for_d)
 
             d_loss = hinge_d_loss(real_pred, fake_pred)
 
             opt_D.zero_grad()
             d_loss.backward()
             opt_D.step()
+        else:
+            pass
 
         # -------------------
         # 2. Train Generator
         # -------------------
         preds = G(inputs)
-        
+
+        # ---- Adversarial loss ----
         if use_adv:
-            fake_pred = D(inputs, preds)
-            g_adv = hinge_g_loss(fake_pred) * lambda_adv
+            fake_pred_for_g = D(inputs, preds)
+            g_adv = hinge_g_loss(fake_pred_for_g) * lambda_adv
         else:
             g_adv = torch.tensor(0.0, device=device)
 
+        # ---- Pixel loss (L1) ----
         g_pixel = pixel_loss(preds, gts) * current_l1
 
+        # ---- Perceptual loss (VGG) ----
         perc_loss = torch.tensor(0.0, device=device)
         if vgg_model is not None:
             preds_v = (preds + 1.0) / 2.0
@@ -434,14 +709,16 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
                 feat_gt = vgg_model(gts_norm)
             perc_loss = F.l1_loss(feat_pred, feat_gt) * lambda_perc
 
+        # ---- Feature Matching loss ----
         fm_loss = torch.tensor(0.0, device=device)
         if use_fm:
-            real_feats = D.get_feats(inputs, gts)
+            with torch.no_grad():
+                real_feats = D.get_feats(inputs, gts)
             fake_feats = D.get_feats(inputs, preds)
-            fm_loss = 0.0
+            acc = 0.0
             for rf, ff in zip(real_feats, fake_feats):
-                fm_loss = fm_loss + F.l1_loss(ff, rf.detach())
-            fm_loss = fm_loss * lambda_fm
+                acc = acc + F.l1_loss(ff, rf.detach())
+            fm_loss = acc * lambda_fm
 
         g_loss = g_pixel + g_adv + perc_loss + fm_loss
 
@@ -454,69 +731,174 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
     return running_loss / len(loader.dataset)
 
 
-def validate(model, loader, loss_fn, device, discriminator=None, sample_indices=None, sample_dir=None):
+# def validate(model, loader, loss_fn, device, discriminator=None, sample_indices=None, sample_dir=None):
+#     model.eval()
+#     if discriminator is not None:
+#         discriminator.eval()
+#     running_loss = 0.0
+#     psnr_list_deb = []
+#     psnr_list_noisy = []
+#     ssim_list = []
+#     dists_list = []
+#     dists_model = DISTS().to(device)
+
+#     saved = 0
+
+#     global_idx = 0
+#     num_samples_to_save = len(sample_indices) if sample_indices else 0
+
+
+#     with torch.no_grad():
+#         for inputs, gts, fnames in tqdm(loader, desc='val', leave=False):
+#             inputs = inputs.to(device)
+#             gts = gts.to(device)
+#             preds = model(inputs)
+
+#             d_maps = None
+#             if discriminator is not None:
+#                 d_maps = discriminator(inputs, preds)
+
+#             loss = loss_fn(preds, gts)
+#             running_loss += loss.item() * inputs.size(0)
+
+#             preds_np = (preds.cpu().numpy() + 1.0) / 2.0
+#             inputs_np = (inputs.cpu().numpy() + 1.0) / 2.0
+#             gts_np = (gts.cpu().numpy() + 1.0) / 2.0
+#             for i in range(preds_np.shape[0]):
+#                 psnr_noisy = compute_psnr(inputs_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
+#                 psnr_list_noisy.append(psnr_noisy)
+
+#                 psnr = compute_psnr(preds_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
+#                 psnr_list_deb.append(psnr)
+
+
+#                 pred_t = torch.from_numpy(preds_np[i]).float().to(device)
+#                 gt_t   = torch.from_numpy(gts_np[i]).float().to(device)
+
+#                 pred_t = pred_t.unsqueeze(0)
+#                 gt_t   = gt_t.unsqueeze(0)
+
+#                 dists_value = dists_model(pred_t, gt_t).item()
+
+#                 dists_list.append(dists_value)
+
+#                 pred_t = torch.tensor(preds_np[i])
+#                 gt_t   = torch.tensor(gts_np[i])
+#                 ssim = compute_ssim(pred_t, gt_t)
+#                 ssim_list.append(ssim)
+#             if sample_dir is not None and sample_indices:
+#                 for i in range(inputs.size(0)):
+#                     if global_idx in sample_indices:
+#                         in_img = tensor_to_uint8(inputs[i])
+#                         pred_img = tensor_to_uint8(preds[i])
+#                         gt_img = tensor_to_uint8(gts[i])
+#                         residual = preds[i] - inputs[i]
+#                         res_img = tensor_to_uint8(residual)
+
+#                         base = os.path.splitext(fnames[i])[0]
+
+#                         Image.fromarray(in_img).save(os.path.join(sample_dir, f'{base}_input.png'))
+#                         Image.fromarray(pred_img).save(os.path.join(sample_dir, f'{base}_pred.png'))
+#                         Image.fromarray(gt_img).save(os.path.join(sample_dir, f'{base}_gt.png'))
+#                         Image.fromarray(res_img).save(os.path.join(sample_dir, f'{base}_residual.png'))
+
+#                         if d_maps is not None:
+#                             d_map = d_maps[i]
+#                             d_map = torch.sigmoid(d_map)
+#                             d_map_resized = F.interpolate(d_map.unsqueeze(0), size=inputs.shape[2:], mode='nearest').squeeze(0)
+#                             d_map_norm = 2.0 * d_map_resized - 1.0
+#                             d_img = tensor_to_uint8(d_map_norm.repeat(3,1,1))
+#                             Image.fromarray(d_img).save(os.path.join(sample_dir, f'{base}_dmap.png'))
+
+#                         saved += 1
+
+#                     global_idx += 1
+#                     if saved >= num_samples_to_save:
+#                         break
+
+#     avg_loss = running_loss / len(loader.dataset)
+#     avg_psnr_noise = float(np.mean(psnr_list_noisy)) if len(psnr_list_noisy) else 0.0
+#     avg_psnr_deb = float(np.mean(psnr_list_deb)) if len(psnr_list_deb) else 0.0
+#     avg_ssim = float(np.mean(ssim_list)) if ssim_list else 0.0
+#     avg_dist = float(np.mean(dists_list)) if len(dists_list) else 0.0
+
+#     return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim,avg_dist
+
+
+
+def validate(model, loader, loss_fn, device,
+             discriminator=None, sample_indices=None, sample_dir=None,
+             epoch=0, pretrain_epochs=PRETRAIN_EPOCHS):
+
     model.eval()
-    if discriminator is not None:
+
+    use_discriminator = (discriminator is not None and epoch > pretrain_epochs)
+    if use_discriminator:
         discriminator.eval()
+
     running_loss = 0.0
     psnr_list_deb = []
     psnr_list_noisy = []
     ssim_list = []
     dists_list = []
-    dists_model = DISTS().to(device)
+
+    dists_model = DISTS().to(device).eval()
 
     saved = 0
-
     global_idx = 0
     num_samples_to_save = len(sample_indices) if sample_indices else 0
-
 
     with torch.no_grad():
         for inputs, gts, fnames in tqdm(loader, desc='val', leave=False):
             inputs = inputs.to(device)
             gts = gts.to(device)
+
             preds = model(inputs)
 
-            d_maps = None
-            if discriminator is not None:
+            if use_discriminator:
                 d_maps = discriminator(inputs, preds)
+            else:
+                d_maps = None
 
             loss = loss_fn(preds, gts)
             running_loss += loss.item() * inputs.size(0)
 
-            preds_np = (preds.cpu().numpy() + 1.0) / 2.0
+            preds_np  = (preds.cpu().numpy() + 1.0) / 2.0
             inputs_np = (inputs.cpu().numpy() + 1.0) / 2.0
-            gts_np = (gts.cpu().numpy() + 1.0) / 2.0
+            gts_np    = (gts.cpu().numpy() + 1.0) / 2.0
+
             for i in range(preds_np.shape[0]):
-                psnr_noisy = compute_psnr(inputs_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
+
+                # PSNR noisy
+                psnr_noisy = compute_psnr(inputs_np[i].transpose(1,2,0),
+                                          gts_np[i].transpose(1,2,0))
                 psnr_list_noisy.append(psnr_noisy)
 
-                psnr = compute_psnr(preds_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
+                # PSNR denoised
+                psnr = compute_psnr(preds_np[i].transpose(1,2,0),
+                                    gts_np[i].transpose(1,2,0))
                 psnr_list_deb.append(psnr)
 
-
-                pred_t = torch.from_numpy(preds_np[i]).float().to(device)
-                gt_t   = torch.from_numpy(gts_np[i]).float().to(device)
-
-                pred_t = pred_t.unsqueeze(0)
-                gt_t   = gt_t.unsqueeze(0)
-
+                # DISTS
+                pred_t = torch.from_numpy(preds_np[i]).float().to(device).unsqueeze(0)
+                gt_t   = torch.from_numpy(gts_np[i]).float().to(device).unsqueeze(0)
                 dists_value = dists_model(pred_t, gt_t).item()
-
                 dists_list.append(dists_value)
 
+                # SSIM
                 pred_t = torch.tensor(preds_np[i])
                 gt_t   = torch.tensor(gts_np[i])
                 ssim = compute_ssim(pred_t, gt_t)
                 ssim_list.append(ssim)
+
             if sample_dir is not None and sample_indices:
                 for i in range(inputs.size(0)):
                     if global_idx in sample_indices:
+
                         in_img = tensor_to_uint8(inputs[i])
                         pred_img = tensor_to_uint8(preds[i])
                         gt_img = tensor_to_uint8(gts[i])
-                        residual = preds[i] - inputs[i]
-                        res_img = tensor_to_uint8(residual)
+                        res_img = tensor_to_uint8(preds[i] - inputs[i])
 
                         base = os.path.splitext(fnames[i])[0]
 
@@ -526,12 +908,12 @@ def validate(model, loader, loss_fn, device, discriminator=None, sample_indices=
                         Image.fromarray(res_img).save(os.path.join(sample_dir, f'{base}_residual.png'))
 
                         if d_maps is not None:
-                            d_map = d_maps[i]
-                            d_map = torch.sigmoid(d_map)
-                            d_map_resized = F.interpolate(d_map.unsqueeze(0), size=inputs.shape[2:], mode='nearest').squeeze(0)
-                            d_map_norm = 2.0 * d_map_resized - 1.0
-                            d_img = tensor_to_uint8(d_map_norm.repeat(3,1,1))
-                            Image.fromarray(d_img).save(os.path.join(sample_dir, f'{base}_dmap.png'))
+                            d_map = torch.sigmoid(d_maps[i])     
+                            d_map_resized = F.interpolate(d_map.unsqueeze(0),
+                                                          size=inputs.shape[2:],
+                                                          mode='nearest').squeeze(0)
+                            d_map_img = tensor_to_uint8(d_map_resized.repeat(3,1,1))
+                            Image.fromarray(d_map_img).save(os.path.join(sample_dir, f'{base}_dmap.png'))
 
                         saved += 1
 
@@ -540,12 +922,14 @@ def validate(model, loader, loss_fn, device, discriminator=None, sample_indices=
                         break
 
     avg_loss = running_loss / len(loader.dataset)
-    avg_psnr_noise = float(np.mean(psnr_list_noisy)) if len(psnr_list_noisy) else 0.0
-    avg_psnr_deb = float(np.mean(psnr_list_deb)) if len(psnr_list_deb) else 0.0
-    avg_ssim = float(np.mean(ssim_list)) if ssim_list else 0.0
-    avg_dist = float(np.mean(dists_list)) if len(dists_list) else 0.0
+    avg_psnr_noise = float(np.mean(psnr_list_noisy))
+    avg_psnr_deb   = float(np.mean(psnr_list_deb))
+    avg_ssim       = float(np.mean(ssim_list))
+    avg_dist       = float(np.mean(dists_list))
 
-    return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim,avg_dist
+    return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim, avg_dist
+
+
 
 # ------------------ Main runner ------------------
 
@@ -566,7 +950,10 @@ def run_training(train_input, train_gt, val_input, val_gt,
 
     print("Indices d'images sélectionnés pour cette session :", sample_indices)
 
-    model = UNetModel(in_ch=3, out_ch=3).to(device)
+    #model = UNetModel(in_ch=3, out_ch=3).to(device)
+
+    model = RDUNet(channels=3, **{"base filters": 64}).to(device)
+
     discriminator = PatchGANDiscriminator().to(device)
     opt_G = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999))
     opt_D = torch.optim.Adam(discriminator.parameters(), lr=LR_D, betas=(0.5, 0.999))
@@ -595,13 +982,9 @@ def run_training(train_input, train_gt, val_input, val_gt,
 
         current_l1 = get_l1_lambda(epoch, num_epochs)
 
-        # use_fm = (epoch > PRETRAIN_EPOCHS)
-        # use_adv = (epoch > PRETRAIN_EPOCHS)
-        # train_d = (epoch > PRETRAIN_EPOCHS)
-
-        use_fm = (epoch % 2 == 0)
-        use_adv = (epoch % 2 == 0)
-        train_d = (epoch % 2 == 0)
+        use_fm = (epoch > PRETRAIN_EPOCHS)
+        use_adv = (epoch > PRETRAIN_EPOCHS)
+        train_d = (epoch > PRETRAIN_EPOCHS)
 
         useGAN = (use_adv==True)
         print("GAN used ? ",useGAN)
