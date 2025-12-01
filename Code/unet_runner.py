@@ -68,40 +68,35 @@ TEST_GT_DIR =     '../allImages/validation/truth/test'
 
 
 
-PRETRAIN_EPOCHS = 10
-L1_BASE = 80.0
-L1_FINAL = 40.0
-LAMBDA_PERCEPTUAL = 0.02
-LAMBDA_FM = 0.03
-LAMBDA_ADV = 0.5 
-LR = 0.0002
-LR_D = 0.00004
-L1_LAMBDA = 25.0
+# PRETRAIN_EPOCHS = 10
+# L1_BASE = 80.0
+# L1_FINAL = 40.0
+# LAMBDA_PERCEPTUAL = 0.02
+# LAMBDA_FM = 0.03
+# LAMBDA_ADV = 0.5 
+# LR = 0.0002
+# LR_D = 0.00004
+# L1_LAMBDA = 25.0
 
 
 #PARAM LES PLUS OPTI POUR L'INSTANT
 
-#PRETRAIN_EPOCHS = 20
-#L1_BASE = 100.0
-#L1_FINAL = 40.0
-#LAMBDA_PERCEPTUAL = 0.02
-#LAMBDA_FM = 0.02
-#LAMBDA_ADV = 0.2
-#LR = 0.0002
-#LR_D = 0.00004
-#L1_LAMBDA = 25.0
+PRETRAIN_EPOCHS = 20
+L1_BASE = 100.0
+L1_FINAL = 40.0
+LAMBDA_PERCEPTUAL = 0.02
+LAMBDA_FM = 0.02
+LAMBDA_ADV = 0.2
+LR = 0.0002
+LR_D = 0.00004
+L1_LAMBDA = 25.0
 
 RESIDUAL_LEARNING = True
-IMG_SIZE = (256, 256)
+IMG_SIZE = (128, 128)
 BATCH_SIZE = 16
 NUM_EPOCHS = 25
 SAVE_EVERY = 1
 NUM_WORKERS = 4
-
-
-
-
-
 
 
 CHECKPOINT_DIR = 'model/UNet_runner'
@@ -593,16 +588,23 @@ def run_training(train_input, train_gt, val_input, val_gt,
 
     loss_fn = nn.L1Loss()
 
-    history = {'train_loss': [], 'val_loss': [], 'val_psnr_before': [], 'val_psnr_after': []}
+    history = {'train_loss': [], 'val_loss': [], 'val_psnr_before': [], 'val_psnr_after': [],'val_ssim': [],'val_dists': []}
 
     for epoch in range(1, num_epochs+1):
         print(f'Epoch {epoch}/{num_epochs} — training...')
 
         current_l1 = get_l1_lambda(epoch, num_epochs)
 
-        use_fm = (epoch > PRETRAIN_EPOCHS)
-        use_adv = (epoch > PRETRAIN_EPOCHS)
-        train_d = (epoch > PRETRAIN_EPOCHS)
+        # use_fm = (epoch > PRETRAIN_EPOCHS)
+        # use_adv = (epoch > PRETRAIN_EPOCHS)
+        # train_d = (epoch > PRETRAIN_EPOCHS)
+
+        use_fm = (epoch % 2 == 0)
+        use_adv = (epoch % 2 == 0)
+        train_d = (epoch % 2 == 0)
+
+        useGAN = (use_adv==True)
+        print("GAN used ? ",useGAN)
 
         train_loss = train_one_epoch(
             model, discriminator, train_loader, opt_G, opt_D, loss_fn, device,
@@ -635,7 +637,8 @@ def run_training(train_input, train_gt, val_input, val_gt,
         history['val_loss'].append(val_loss)
         history['val_psnr_before'].append(val_psnr_before)
         history['val_psnr_after'].append(val_psnr_after)
-        history.setdefault('val_ssim', []).append(val_ssim)
+        history['val_ssim'].append(val_ssim)
+        history['val_dists'].append(val_dist)
 
     plt.figure()
     plt.plot(range(1, len(history['train_loss'])+1), history['train_loss'], label='train_loss')
@@ -647,6 +650,37 @@ def run_training(train_input, train_gt, val_input, val_gt,
     plt.savefig(plot_path, dpi=150, bbox_inches='tight')
     plt.close()
     print('Saved loss plot to', plot_path)
+
+    plt.figure()
+    plt.plot(range(1, len(history['val_psnr_after'])+1), history['val_psnr_after'], label='PSNR')
+    plt.xlabel('epoch')
+    plt.ylabel('PSNR')
+    plt.legend()
+    plot_path = os.path.join(checkpoint_dir, 'psnr_curve.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print('Saved loss plot to', plot_path)
+
+    plt.figure()
+    plt.plot(range(1, len(history['val_ssim'])+1), history['val_ssim'], label='SSIM')
+    plt.xlabel('epoch')
+    plt.ylabel('SSIM')
+    plt.legend()
+    plot_path = os.path.join(checkpoint_dir, 'ssim_curve.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print('Saved loss plot to', plot_path)
+
+    plt.figure()
+    plt.plot(range(1, len(history['val_dists'])+1), history['val_dists'], label='DISTS')
+    plt.xlabel('epoch')
+    plt.ylabel('DISTS')
+    plt.legend()
+    plot_path = os.path.join(checkpoint_dir, 'dists_curve.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print('Saved loss plot to', plot_path)
+
     return history
 
 
