@@ -2,7 +2,7 @@ import numpy as np
 import cv2
 import os
 
-def add_salt_and_pepper(image, salt_ratio=0.05, pepper_ratio=0.05):
+def add_salt_and_pepper(image, salt_ratio=0.40, pepper_ratio=0.40):
     noisy = image.copy()
     if noisy.ndim == 2:
         row, col = noisy.shape

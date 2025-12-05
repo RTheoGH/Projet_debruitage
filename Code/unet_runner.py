@@ -59,11 +59,11 @@ def pick_random_indices(dataloader, num_samples=8):
     return set(random.sample(range(total), k=min(num_samples, total)))
 
 # ------------------ CONFIG------------------
-TRAIN_INPUT_DIR = '../allImages/train/noised/periodic'  
+TRAIN_INPUT_DIR = '../allImages/train/noised/saltandpepper'  
 TRAIN_GT_DIR =    '../allImages/train/truth' 
-VAL_INPUT_DIR =   '../allImages/validation/noised/periodic'  
+VAL_INPUT_DIR =   '../allImages/validation/noised/saltandpepper'  
 VAL_GT_DIR =      '../allImages/validation/truth'
-TEST_INPUT_DIR =  '../allImages/validation/noised/periodic/test'
+TEST_INPUT_DIR =  '../allImages/validation/noised/saltandpepper/test'
 TEST_GT_DIR =     '../allImages/validation/truth/test'
 
 
