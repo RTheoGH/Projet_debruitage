@@ -554,86 +554,6 @@ def tensor_to_uint8(img_tensor):
     img = np.transpose(img, (1,2,0))
     return img
 
-# def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
-#                     current_l1= L1_BASE,
-#                     vgg_model=None,
-#                     use_fm=True,
-#                     use_adv=True,
-#                     train_d=True,
-#                     lambda_adv=LAMBDA_ADV,
-#                     lambda_fm=LAMBDA_FM,
-#                     lambda_perc=LAMBDA_PERCEPTUAL):
-#     G.train()
-#     D.train()
-#     running_loss = 0.0
-
-#     for inputs, gts, _ in tqdm(loader, desc='train', leave=False):
-#         inputs = inputs.to(device)
-#         gts = gts.to(device)
-
-#         # -------------------------------
-#         # 1. Train Discriminator
-#         # -------------------------------
-#         if train_d:
-#             with torch.no_grad():
-#                 preds = G(inputs).detach()
-
-#             real_pred = D(inputs, gts)
-#             fake_pred = D(inputs, preds)
-
-#             d_loss = hinge_d_loss(real_pred, fake_pred)
-
-#             opt_D.zero_grad()
-#             d_loss.backward()
-#             opt_D.step()
-
-#         # -------------------
-#         # 2. Train Generator
-#         # -------------------
-#         preds = G(inputs)
-        
-#         if use_adv:
-#             fake_pred = D(inputs, preds)
-#             g_adv = hinge_g_loss(fake_pred) * lambda_adv
-#         else:
-#             g_adv = torch.tensor(0.0, device=device)
-
-#         g_pixel = pixel_loss(preds, gts) * current_l1
-
-#         perc_loss = torch.tensor(0.0, device=device)
-#         if vgg_model is not None:
-#             preds_v = (preds + 1.0) / 2.0
-#             gts_v = (gts + 1.0) / 2.0
-#             mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1,3,1,1)
-#             std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1,3,1,1)
-#             preds_norm = (preds_v - mean) / std
-#             gts_norm = (gts_v - mean) / std
-#             with torch.no_grad():
-#                 feat_pred = vgg_model(preds_norm)
-#                 feat_gt = vgg_model(gts_norm)
-#             perc_loss = F.l1_loss(feat_pred, feat_gt) * lambda_perc
-
-#         fm_loss = torch.tensor(0.0, device=device)
-#         if use_fm:
-#             real_feats = D.get_feats(inputs, gts)
-#             fake_feats = D.get_feats(inputs, preds)
-#             fm_loss = 0.0
-#             for rf, ff in zip(real_feats, fake_feats):
-#                 fm_loss = fm_loss + F.l1_loss(ff, rf.detach())
-#             fm_loss = fm_loss * lambda_fm
-
-#         g_loss = g_pixel + g_adv + perc_loss + fm_loss
-
-#         opt_G.zero_grad()
-#         g_loss.backward()
-#         opt_G.step()
-
-#         running_loss += g_pixel.item() * inputs.size(0)
-
-#     return running_loss / len(loader.dataset)
-
-
-
 def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
                     current_l1= L1_BASE,
                     vgg_model=None,
@@ -643,59 +563,43 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
                     lambda_adv=LAMBDA_ADV,
                     lambda_fm=LAMBDA_FM,
                     lambda_perc=LAMBDA_PERCEPTUAL):
-    """
-    Train for one epoch with protections:
-    - D is only used (forward/backward) when use_adv or use_fm or train_d is True.
-    - When GAN is fully off, D is set to eval() and not called at all.
-    - Feature-matching computes real_feats with torch.no_grad() and fake_feats with grad so gradients flow to G only.
-    """
     G.train()
-
-    if train_d or use_adv or use_fm:
-        D.train()
-    else:
-        D.eval()
-
+    D.train()
     running_loss = 0.0
 
     for inputs, gts, _ in tqdm(loader, desc='train', leave=False):
         inputs = inputs.to(device)
         gts = gts.to(device)
 
-        # -----------------------
+        # -------------------------------
         # 1. Train Discriminator
-        # -----------------------
+        # -------------------------------
         if train_d:
             with torch.no_grad():
-                preds_for_d = G(inputs).detach()
+                preds = G(inputs).detach()
 
             real_pred = D(inputs, gts)
-            fake_pred = D(inputs, preds_for_d)
+            fake_pred = D(inputs, preds)
 
             d_loss = hinge_d_loss(real_pred, fake_pred)
 
             opt_D.zero_grad()
             d_loss.backward()
             opt_D.step()
-        else:
-            pass
 
         # -------------------
         # 2. Train Generator
         # -------------------
         preds = G(inputs)
-
-        # ---- Adversarial loss ----
+        
         if use_adv:
-            fake_pred_for_g = D(inputs, preds)
-            g_adv = hinge_g_loss(fake_pred_for_g) * lambda_adv
+            fake_pred = D(inputs, preds)
+            g_adv = hinge_g_loss(fake_pred) * lambda_adv
         else:
             g_adv = torch.tensor(0.0, device=device)
 
-        # ---- Pixel loss (L1) ----
         g_pixel = pixel_loss(preds, gts) * current_l1
 
-        # ---- Perceptual loss (VGG) ----
         perc_loss = torch.tensor(0.0, device=device)
         if vgg_model is not None:
             preds_v = (preds + 1.0) / 2.0
@@ -709,16 +613,14 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
                 feat_gt = vgg_model(gts_norm)
             perc_loss = F.l1_loss(feat_pred, feat_gt) * lambda_perc
 
-        # ---- Feature Matching loss ----
         fm_loss = torch.tensor(0.0, device=device)
         if use_fm:
-            with torch.no_grad():
-                real_feats = D.get_feats(inputs, gts)
+            real_feats = D.get_feats(inputs, gts)
             fake_feats = D.get_feats(inputs, preds)
-            acc = 0.0
+            fm_loss = 0.0
             for rf, ff in zip(real_feats, fake_feats):
-                acc = acc + F.l1_loss(ff, rf.detach())
-            fm_loss = acc * lambda_fm
+                fm_loss = fm_loss + F.l1_loss(ff, rf.detach())
+            fm_loss = fm_loss * lambda_fm
 
         g_loss = g_pixel + g_adv + perc_loss + fm_loss
 
@@ -731,174 +633,71 @@ def train_one_epoch(G, D, loader, opt_G, opt_D, pixel_loss, device,
     return running_loss / len(loader.dataset)
 
 
-# def validate(model, loader, loss_fn, device, discriminator=None, sample_indices=None, sample_dir=None):
-#     model.eval()
-#     if discriminator is not None:
-#         discriminator.eval()
-#     running_loss = 0.0
-#     psnr_list_deb = []
-#     psnr_list_noisy = []
-#     ssim_list = []
-#     dists_list = []
-#     dists_model = DISTS().to(device)
-
-#     saved = 0
-
-#     global_idx = 0
-#     num_samples_to_save = len(sample_indices) if sample_indices else 0
 
 
-#     with torch.no_grad():
-#         for inputs, gts, fnames in tqdm(loader, desc='val', leave=False):
-#             inputs = inputs.to(device)
-#             gts = gts.to(device)
-#             preds = model(inputs)
-
-#             d_maps = None
-#             if discriminator is not None:
-#                 d_maps = discriminator(inputs, preds)
-
-#             loss = loss_fn(preds, gts)
-#             running_loss += loss.item() * inputs.size(0)
-
-#             preds_np = (preds.cpu().numpy() + 1.0) / 2.0
-#             inputs_np = (inputs.cpu().numpy() + 1.0) / 2.0
-#             gts_np = (gts.cpu().numpy() + 1.0) / 2.0
-#             for i in range(preds_np.shape[0]):
-#                 psnr_noisy = compute_psnr(inputs_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
-#                 psnr_list_noisy.append(psnr_noisy)
-
-#                 psnr = compute_psnr(preds_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
-#                 psnr_list_deb.append(psnr)
-
-
-#                 pred_t = torch.from_numpy(preds_np[i]).float().to(device)
-#                 gt_t   = torch.from_numpy(gts_np[i]).float().to(device)
-
-#                 pred_t = pred_t.unsqueeze(0)
-#                 gt_t   = gt_t.unsqueeze(0)
-
-#                 dists_value = dists_model(pred_t, gt_t).item()
-
-#                 dists_list.append(dists_value)
-
-#                 pred_t = torch.tensor(preds_np[i])
-#                 gt_t   = torch.tensor(gts_np[i])
-#                 ssim = compute_ssim(pred_t, gt_t)
-#                 ssim_list.append(ssim)
-#             if sample_dir is not None and sample_indices:
-#                 for i in range(inputs.size(0)):
-#                     if global_idx in sample_indices:
-#                         in_img = tensor_to_uint8(inputs[i])
-#                         pred_img = tensor_to_uint8(preds[i])
-#                         gt_img = tensor_to_uint8(gts[i])
-#                         residual = preds[i] - inputs[i]
-#                         res_img = tensor_to_uint8(residual)
-
-#                         base = os.path.splitext(fnames[i])[0]
-
-#                         Image.fromarray(in_img).save(os.path.join(sample_dir, f'{base}_input.png'))
-#                         Image.fromarray(pred_img).save(os.path.join(sample_dir, f'{base}_pred.png'))
-#                         Image.fromarray(gt_img).save(os.path.join(sample_dir, f'{base}_gt.png'))
-#                         Image.fromarray(res_img).save(os.path.join(sample_dir, f'{base}_residual.png'))
-
-#                         if d_maps is not None:
-#                             d_map = d_maps[i]
-#                             d_map = torch.sigmoid(d_map)
-#                             d_map_resized = F.interpolate(d_map.unsqueeze(0), size=inputs.shape[2:], mode='nearest').squeeze(0)
-#                             d_map_norm = 2.0 * d_map_resized - 1.0
-#                             d_img = tensor_to_uint8(d_map_norm.repeat(3,1,1))
-#                             Image.fromarray(d_img).save(os.path.join(sample_dir, f'{base}_dmap.png'))
-
-#                         saved += 1
-
-#                     global_idx += 1
-#                     if saved >= num_samples_to_save:
-#                         break
-
-#     avg_loss = running_loss / len(loader.dataset)
-#     avg_psnr_noise = float(np.mean(psnr_list_noisy)) if len(psnr_list_noisy) else 0.0
-#     avg_psnr_deb = float(np.mean(psnr_list_deb)) if len(psnr_list_deb) else 0.0
-#     avg_ssim = float(np.mean(ssim_list)) if ssim_list else 0.0
-#     avg_dist = float(np.mean(dists_list)) if len(dists_list) else 0.0
-
-#     return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim,avg_dist
-
-
-
-def validate(model, loader, loss_fn, device,
-             discriminator=None, sample_indices=None, sample_dir=None,
-             epoch=0, pretrain_epochs=PRETRAIN_EPOCHS):
-
+def validate(model, loader, loss_fn, device, discriminator=None, sample_indices=None, sample_dir=None):
     model.eval()
-
-    use_discriminator = (discriminator is not None and epoch > pretrain_epochs)
-    if use_discriminator:
+    if discriminator is not None:
         discriminator.eval()
-
     running_loss = 0.0
     psnr_list_deb = []
     psnr_list_noisy = []
     ssim_list = []
     dists_list = []
-
-    dists_model = DISTS().to(device).eval()
+    dists_model = DISTS().to(device)
 
     saved = 0
+
     global_idx = 0
     num_samples_to_save = len(sample_indices) if sample_indices else 0
+
 
     with torch.no_grad():
         for inputs, gts, fnames in tqdm(loader, desc='val', leave=False):
             inputs = inputs.to(device)
             gts = gts.to(device)
-
             preds = model(inputs)
 
-            if use_discriminator:
+            d_maps = None
+            if discriminator is not None:
                 d_maps = discriminator(inputs, preds)
-            else:
-                d_maps = None
 
             loss = loss_fn(preds, gts)
             running_loss += loss.item() * inputs.size(0)
 
-            preds_np  = (preds.cpu().numpy() + 1.0) / 2.0
+            preds_np = (preds.cpu().numpy() + 1.0) / 2.0
             inputs_np = (inputs.cpu().numpy() + 1.0) / 2.0
-            gts_np    = (gts.cpu().numpy() + 1.0) / 2.0
-
+            gts_np = (gts.cpu().numpy() + 1.0) / 2.0
             for i in range(preds_np.shape[0]):
-
-                # PSNR noisy
-                psnr_noisy = compute_psnr(inputs_np[i].transpose(1,2,0),
-                                          gts_np[i].transpose(1,2,0))
+                psnr_noisy = compute_psnr(inputs_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
                 psnr_list_noisy.append(psnr_noisy)
 
-                # PSNR denoised
-                psnr = compute_psnr(preds_np[i].transpose(1,2,0),
-                                    gts_np[i].transpose(1,2,0))
+                psnr = compute_psnr(preds_np[i].transpose(1,2,0), gts_np[i].transpose(1,2,0))
                 psnr_list_deb.append(psnr)
 
-                # DISTS
-                pred_t = torch.from_numpy(preds_np[i]).float().to(device).unsqueeze(0)
-                gt_t   = torch.from_numpy(gts_np[i]).float().to(device).unsqueeze(0)
+
+                pred_t = torch.from_numpy(preds_np[i]).float().to(device)
+                gt_t   = torch.from_numpy(gts_np[i]).float().to(device)
+
+                pred_t = pred_t.unsqueeze(0)
+                gt_t   = gt_t.unsqueeze(0)
+
                 dists_value = dists_model(pred_t, gt_t).item()
+
                 dists_list.append(dists_value)
 
-                # SSIM
                 pred_t = torch.tensor(preds_np[i])
                 gt_t   = torch.tensor(gts_np[i])
                 ssim = compute_ssim(pred_t, gt_t)
                 ssim_list.append(ssim)
-
             if sample_dir is not None and sample_indices:
                 for i in range(inputs.size(0)):
                     if global_idx in sample_indices:
-
                         in_img = tensor_to_uint8(inputs[i])
                         pred_img = tensor_to_uint8(preds[i])
                         gt_img = tensor_to_uint8(gts[i])
-                        res_img = tensor_to_uint8(preds[i] - inputs[i])
+                        residual = preds[i] - inputs[i]
+                        res_img = tensor_to_uint8(residual)
 
                         base = os.path.splitext(fnames[i])[0]
 
@@ -908,12 +707,12 @@ def validate(model, loader, loss_fn, device,
                         Image.fromarray(res_img).save(os.path.join(sample_dir, f'{base}_residual.png'))
 
                         if d_maps is not None:
-                            d_map = torch.sigmoid(d_maps[i])     
-                            d_map_resized = F.interpolate(d_map.unsqueeze(0),
-                                                          size=inputs.shape[2:],
-                                                          mode='nearest').squeeze(0)
-                            d_map_img = tensor_to_uint8(d_map_resized.repeat(3,1,1))
-                            Image.fromarray(d_map_img).save(os.path.join(sample_dir, f'{base}_dmap.png'))
+                            d_map = d_maps[i]
+                            d_map = torch.sigmoid(d_map)
+                            d_map_resized = F.interpolate(d_map.unsqueeze(0), size=inputs.shape[2:], mode='nearest').squeeze(0)
+                            d_map_norm = 2.0 * d_map_resized - 1.0
+                            d_img = tensor_to_uint8(d_map_norm.repeat(3,1,1))
+                            Image.fromarray(d_img).save(os.path.join(sample_dir, f'{base}_dmap.png'))
 
                         saved += 1
 
@@ -922,13 +721,12 @@ def validate(model, loader, loss_fn, device,
                         break
 
     avg_loss = running_loss / len(loader.dataset)
-    avg_psnr_noise = float(np.mean(psnr_list_noisy))
-    avg_psnr_deb   = float(np.mean(psnr_list_deb))
-    avg_ssim       = float(np.mean(ssim_list))
-    avg_dist       = float(np.mean(dists_list))
+    avg_psnr_noise = float(np.mean(psnr_list_noisy)) if len(psnr_list_noisy) else 0.0
+    avg_psnr_deb = float(np.mean(psnr_list_deb)) if len(psnr_list_deb) else 0.0
+    avg_ssim = float(np.mean(ssim_list)) if ssim_list else 0.0
+    avg_dist = float(np.mean(dists_list)) if len(dists_list) else 0.0
 
-    return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim, avg_dist
-
+    return avg_loss, avg_psnr_noise, avg_psnr_deb, avg_ssim,avg_dist
 
 
 # ------------------ Main runner ------------------
@@ -950,9 +748,7 @@ def run_training(train_input, train_gt, val_input, val_gt,
 
     print("Indices d'images sélectionnés pour cette session :", sample_indices)
 
-    #model = UNetModel(in_ch=3, out_ch=3).to(device)
-
-    model = RDUNet(channels=3, **{"base filters": 64}).to(device)
+    model = UNetModel(in_ch=3, out_ch=3).to(device)
 
     discriminator = PatchGANDiscriminator().to(device)
     opt_G = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.5, 0.999))
@@ -1022,6 +818,16 @@ def run_training(train_input, train_gt, val_input, val_gt,
         history['val_psnr_after'].append(val_psnr_after)
         history['val_ssim'].append(val_ssim)
         history['val_dists'].append(val_dist)
+
+        if epoch % SAVE_EVERY == 0:
+            save_path = os.path.join(checkpoint_dir, f'model_epoch_{epoch}.pt')
+            torch.save(model.state_dict(), save_path)
+            print(f"  Model saved to {save_path}")
+
+    # Save final model
+    final_path = os.path.join(checkpoint_dir, 'model_final.pt')
+    torch.save(model.state_dict(), final_path)
+    print(f"Final model saved to {final_path}")
 
     plt.figure()
     plt.plot(range(1, len(history['train_loss'])+1), history['train_loss'], label='train_loss')
