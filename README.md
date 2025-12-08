@@ -4,6 +4,8 @@
 
 Ce projet a pour but de débruiter des images en utilisant un réseau de neurones (CNN). Le projet comporte notamment un encodeur, un décodeur ainsi qu'un GAN pour produire des images débruitées.
 
+Lien vidéo : https://drive.google.com/file/d/1Eqobww9i2-thLUZgriai37nKFFPKzNkZ/view?usp=sharing
+
 ### Installation
 ```bash
 pip install -r requirements.txt
