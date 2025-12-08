@@ -5,20 +5,25 @@ from PIL import Image
 import torchvision.transforms as T
 import sys, os
 
-# ------------------ U-Net (tes classes) ------------------
+# même booléen que dans unet_runner.py
+RESIDUAL_LEARNING = True
+
+
+# ------------------ U-Net identique au runner ------------------
 class DoubleConv(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True)
+            nn.LeakyReLU(0.2, inplace=True),
         )
-    def forward(self, x):
-        return self.net(x)
+
+    def forward(self, x): return self.net(x)
+
 
 class Down(nn.Module):
     def __init__(self, in_ch, out_ch):
@@ -27,14 +32,15 @@ class Down(nn.Module):
             nn.MaxPool2d(2),
             DoubleConv(in_ch, out_ch)
         )
-    def forward(self, x):
-        return self.net(x)
+    def forward(self, x): return self.net(x)
+
 
 class Up(nn.Module):
     def __init__(self, in_ch, out_ch):
         super().__init__()
         self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.conv = DoubleConv(in_ch, out_ch)
+
     def forward(self, x, skip):
         x = self.up(x)
         if x.size() != skip.size():
@@ -45,6 +51,7 @@ class Up(nn.Module):
         x = torch.cat([skip, x], dim=1)
         return self.conv(x)
 
+
 class UNetModel(nn.Module):
     def __init__(self, in_ch=3, out_ch=3):
         super().__init__()
@@ -53,25 +60,32 @@ class UNetModel(nn.Module):
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
         self.down4 = Down(512, 512)
-        self.up1 = Up(512+512, 256)
-        self.up2 = Up(256+256, 128)
-        self.up3 = Up(128+128, 64)
-        self.up4 = Up(64+64, 64)
+        self.up1 = Up(1024, 256)
+        self.up2 = Up(512, 128)
+        self.up3 = Up(256, 64)
+        self.up4 = Up(128, 64)
         self.outc = nn.Conv2d(64, out_ch, kernel_size=1)
 
     def forward(self, x):
+        x_input = x
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
+
         x = self.up1(x5, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
         x = self.up4(x, x1)
+
         x = self.outc(x)
-        x = torch.sigmoid(x)
-        return x
+
+        if RESIDUAL_LEARNING:
+            return torch.tanh(x + x_input)
+        else:
+            return torch.tanh(x)
+
 
 # ------------------ Load model ------------------
 def load_model(model_path, device="cpu"):
@@ -81,15 +95,26 @@ def load_model(model_path, device="cpu"):
     model.eval()
     return model
 
-# ------------------ Denoise ------------------
+
+# ------------------ Denoise image ------------------
 def denoise_image(model, input_image, device="cpu"):
-    transform = T.ToTensor()
+    transform = T.Compose([
+        T.ToTensor(),
+        T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))   # même normalisation que l’entraînement
+    ])
+
     x = transform(input_image).unsqueeze(0).to(device)
+
     with torch.no_grad():
         y = model(x)
-    y = y.squeeze().clamp(0, 1).cpu()
+
+    # dénormalisation depuis [-1,1] vers [0,1]
+    y = (y * 0.5 + 0.5).clamp(0,1).squeeze().cpu()
+
     return T.ToPILImage()(y)
 
+
+# ------------------ Main ------------------
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage : python debruitage.py chemin_image.png")
@@ -101,7 +126,7 @@ if __name__ == "__main__":
         print("Erreur : l'image n'existe pas :", image_path)
         sys.exit(1)
 
-    MODEL_PATH = "./model/UNet_runner/model_epoch_20.pt"
+    MODEL_PATH = "../models/gauss_m/UNet_runner/model_epoch_20.pt"
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = load_model(MODEL_PATH, device)
@@ -111,3 +136,4 @@ if __name__ == "__main__":
 
     output_path = "../testImg/denoised.png"
     denoised.save(output_path)
+    print("Image sauvegardée :", output_path)
