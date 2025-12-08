@@ -5,4 +5,5 @@ poisson/
 gaussian/
 allImages/
 __pycache__/
-model/
+Code/model/
+models/

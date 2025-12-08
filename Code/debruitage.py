@@ -101,7 +101,7 @@ if __name__ == "__main__":
         print("Erreur : l'image n'existe pas :", image_path)
         sys.exit(1)
 
-    MODEL_PATH = "./model/UNet_runner/unet_epoch_20.pt"
+    MODEL_PATH = "./model/UNet_runner/model_epoch_20.pt"
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = load_model(MODEL_PATH, device)
