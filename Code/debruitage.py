@@ -60,6 +60,7 @@ class UNetModel(nn.Module):
         self.outc = nn.Conv2d(64, out_ch, kernel_size=1)
 
     def forward(self, x):
+        x_input = x
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
@@ -70,12 +71,16 @@ class UNetModel(nn.Module):
         x = self.up3(x, x2)
         x = self.up4(x, x1)
         x = self.outc(x)
-        x = torch.sigmoid(x)
-        return x
+        
+        # Correction: Utiliser la connexion résiduelle et Tanh comme dans l'entraînement
+        out = x + x_input
+        out = torch.tanh(out)
+        return out
 
 # ------------------ Load model ------------------
 def load_model(model_path, device="cpu"):
     model = UNetModel(in_ch=3, out_ch=3).to(device)
+    # map_location ensures we can load a cuda model on cpu if needed
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
     model.eval()
@@ -83,25 +88,46 @@ def load_model(model_path, device="cpu"):
 
 # ------------------ Denoise ------------------
 def denoise_image(model, input_image, device="cpu"):
-    transform = T.ToTensor()
+    # Correction: Normalisation [-1, 1] comme à l'entraînement
+    transform = T.Compose([
+        T.ToTensor(),
+        T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ])
+    
     x = transform(input_image).unsqueeze(0).to(device)
+    
     with torch.no_grad():
         y = model(x)
-    y = y.squeeze().clamp(0, 1).cpu()
+    
+    # Correction: Dénormalisation [-1, 1] -> [0, 1]
+    y = (y.squeeze() * 0.5) + 0.5
+    y = y.clamp(0, 1).cpu()
+    
     return T.ToPILImage()(y)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage : python debruitage.py chemin_image.png")
+        print("Usage : python debruitage.py chemin_image.png [chemin_modele]")
         sys.exit(1)
 
     image_path = sys.argv[1]
+    
+    if len(sys.argv) > 2:
+        MODEL_PATH = sys.argv[2]
+    else:
+        MODEL_PATH = "./gauss2_m/model_final.pt" 
+        if not os.path.exists(MODEL_PATH):
+             MODEL_PATH = "./weights.pt" # Fallback
 
     if not os.path.exists(image_path):
         print("Erreur : l'image n'existe pas :", image_path)
         sys.exit(1)
-
-    MODEL_PATH = "./model/UNet_runner/unet_epoch_20.pt"
+        
+    if not os.path.exists(MODEL_PATH):
+        print(f"Attention: Le modèle par défaut n'a pas été trouvé à {MODEL_PATH}.")
+        print("Veuillez spécifier le chemin du modèle en 2ème argument.")
+    
+    print(f"Chargement du modèle depuis : {MODEL_PATH}")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = load_model(MODEL_PATH, device)
@@ -110,4 +136,6 @@ if __name__ == "__main__":
     denoised = denoise_image(model, img, device)
 
     output_path = "../testImg/denoised.png"
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     denoised.save(output_path)
+    print(f"Image débruitée sauvegardée sous : {output_path}")

@@ -66,18 +66,16 @@ VAL_GT_DIR =      '../allImages/validation/truth'
 TEST_INPUT_DIR =  '../allImages/validation/noised/gaussian/test'
 TEST_GT_DIR =     '../allImages/validation/truth/test'
 
-
-
 #PARAM LES PLUS OPTI POUR L'INSTANT
 
-PRETRAIN_EPOCHS = 18          
+PRETRAIN_EPOCHS = 10          
 L1_BASE = 80.0                
 L1_FINAL = 30.0               
 LAMBDA_PERCEPTUAL = 0.01      
 LAMBDA_FM = 0.005           
 LAMBDA_ADV = 0.005
 LR = 0.00015                  
-LR_D = 0.00005              
+LR_D = 0.0005              
 L1_LAMBDA = 25.0          
 
 
